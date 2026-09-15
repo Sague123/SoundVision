@@ -116,6 +116,7 @@ const NEUTRAL_LIGHT = {
   bloom: 0, bloomThreshold: 0.5, rays: 0, rim: 0,
   lightColour: [1, 1, 1] as [number, number, number],
   rimColour: [1, 1, 1] as [number, number, number],
+  whitePoint: 1.6,
 };
 const NEUTRAL_LIGHT_STATE: Light = {
   angle: 0, intensity: 0.5, flash: 0, warmth: 0.5,

@@ -60,7 +60,7 @@ export class DebugOverlay {
     // Самый свежий импульс: по нему видно, как классифицировался удар.
     const lastImpulse = stats.scene.impulses[stats.scene.impulses.length - 1] ?? null;
     this.readout.textContent = [
-      `fps      ${stats.fps.toFixed(1)}   кадр ${stats.frameMs.toFixed(1)} мс   quality ${(stats.effectiveQuality * 100).toFixed(0)}%`,
+      `fps      ${stats.fps.toFixed(1)}   кадр ${stats.frameMs.toFixed(1)} мс   качество ${stats.quality}`,
       `energy   ${bar(mood.energy)} ${mood.energy.toFixed(3)}`,
       `flux     ${bar(mood.flux)} ${mood.flux.toFixed(3)}`,
       `bright   ${bar(mood.brightness)} ${mood.brightness.toFixed(3)}`,
@@ -88,6 +88,11 @@ export class DebugOverlay {
       `импульсы ${stats.scene.impulses.length} (эхо ${stats.scene.impulses.filter((i) => i.echo).length})` +
         ` энергия ${stats.scene.impulseEnergy.toFixed(2)}`,
       `палитра  ${stats.harmonyName}, оттенок ${stats.palette.hue.toFixed(0)}°`,
+      `бюджет   ${stats.scene.budget.load.toFixed(2)} из ${stats.scene.budget.limit || '∞'}` +
+        ` ужатие деф ${stats.scene.budget.scale.deformation.toFixed(2)}` +
+        ` удар ${stats.scene.budget.scale.impact.toFixed(2)}` +
+        ` пам ${stats.scene.budget.scale.memory.toFixed(2)}` +
+        ` движ ${stats.scene.budget.scale.motion.toFixed(2)}`,
       `base     ${stats.baseId}`,
       `active   ${stats.activePrimitives.join(', ') || '—'}`,
       `частицы  ${stats.transient.particles} (${stats.transient.particleTypes.join(', ') || '—'})` +

@@ -15,7 +15,7 @@ import { TransientLayer, type TransientDebug } from './layer-transient.ts';
 import { findHarmony, PaletteEngine, type HarmonyScheme, type Palette } from './palette.ts';
 import type { PrimitiveId, RenderFrame } from './primitives/types.ts';
 import { Scene, type SceneConfig, type SceneState } from './scene.ts';
-import { PostPass, type LightSettings } from './post-pass.ts';
+import { PostPass, QUALITY_ORDER, type LightSettings, type QualityLevel } from './post-pass.ts';
 import { trackKey } from './seed.ts';
 
 export interface CompositorStats {
@@ -28,20 +28,25 @@ export interface CompositorStats {
   postActive: boolean;
   palette: Palette;
   scene: SceneState;
-  effectiveQuality: number;
+  /** Действующий уровень качества цепочки; 'off' — цепочка снята целиком. */
+  quality: QualityLevel | 'off';
   seedLabel: string;
   /** Имя действующей гармонической схемы — для панели и отладки. */
   harmonyName: string;
   /** Текущий адаптивный порог свечения. */
   bloomThreshold: number;
+  /** Средняя яркость кадра: по ней текст подбирает контрастный цвет. */
+  meanLuminance: number;
 }
 
-/** Ниже этого fps начинаем экономить на разрешении шейдера. */
+/** Ниже этого fps начинаем снижать качество, выше — пробуем вернуть. */
 const FPS_FLOOR = 50;
 const FPS_CEILING = 58;
-const QUALITY_MIN = 0.3;
-const QUALITY_STEP = 0.1;
 const QUALITY_CHECK_MS = 2000;
+/** Сколько проверок подряд должен держаться провал, прежде чем снижать. */
+const DOWNGRADE_STREAK = 2;
+/** И сколько — запас, прежде чем повышать обратно. Возвращаемся неохотно. */
+const UPGRADE_STREAK = 6;
 
 /** Размер копии кадра для замера средней яркости и период замера. */
 const LUMA_WIDTH = 16;
@@ -73,8 +78,9 @@ export class Compositor {
 
   private frameTimes: number[] = [];
   private fps = 60;
-  private effectiveQuality = 0.5;
+  private qualityIndex = 1;
   private lastQualityCheckMs = 0;
+  private highFpsStreak = 0;
   /**
    * Пост-конвейер — четыре полноэкранных прохода. Если разрешение raymarch
    * уже на минимуме, а fps всё равно не вытягивает, снимаем его целиком:
@@ -82,8 +88,9 @@ export class Compositor {
    */
   private postAllowed = true;
   private lowFpsStreak = 0;
-  /** Адаптивный порог bloom, см. measureLuminance. */
+  /** Адаптивный порог bloom и средняя яркость кадра, см. measureLuminance. */
   private bloomThreshold = 0.5;
+  private meanLuminance = 0.2;
   private frameCounter = 0;
   private readonly lumaCanvas = document.createElement('canvas');
   private readonly lumaCtx: CanvasRenderingContext2D | null;
@@ -186,10 +193,11 @@ export class Compositor {
       postActive: posted,
       palette,
       scene,
-      effectiveQuality: this.effectiveQuality,
+      quality: this.postAllowed ? QUALITY_ORDER[this.qualityIndex] : 'off',
       seedLabel: state.seed.label,
       harmonyName: harmony.name,
       bloomThreshold: this.bloomThreshold,
+      meanLuminance: this.meanLuminance,
     };
   }
 
@@ -214,6 +222,7 @@ export class Compositor {
 
     const minSide = Math.min(this.width, this.height);
     const camera = settings.camera.enabled ? scene.camera : IDLE_CAMERA;
+    // Мастер амплитуды уже применён внутри сцены — здесь только ручка камеры.
     const amount = clamp01(settings.camera.amount);
 
     // Тряска входит в смещение камеры: это её толчок, а не отдельный эффект.
@@ -296,6 +305,9 @@ export class Compositor {
       rim: clamp01(settings.light.rim),
       lightColour: toUnitRgb(palette.accentRgb(scene.light.warmth)),
       rimColour: toUnitRgb(palette.accentRgb(0.95)),
+      // Точка белого едет за средней яркостью: на светлом кадре запас нужен
+      // больше, иначе тон-маппинг съедает контраст.
+      whitePoint: clamp(1.2, 2.4, 1.2 + this.meanLuminance * 2),
     };
     // Выключенные дыхание и виньетка — это нейтральные значения, а не отдельная
     // ветка в шейдере.
@@ -340,6 +352,7 @@ export class Compositor {
       return;
     }
     const mean = sum / (LUMA_WIDTH * LUMA_HEIGHT);
+    this.meanLuminance += (mean - this.meanLuminance) * 0.25;
     // Порог держится выше средней яркости: светится то, что выделяется на фоне
     // кадра, а не весь кадр целиком. Именно это и не даёт выжечь картинку.
     const target = clamp(0.2, 0.85, mean * 1.5 + 0.18);
@@ -367,31 +380,48 @@ export class Compositor {
    * шейдера; когда запас появился — возвращаем обратно, но не выше настройки.
    */
   private applyQuality(nowMs: number, settings: Settings): void {
-    const target = clamp(QUALITY_MIN, 1, settings.generator.quality);
+    const target = QUALITY_ORDER.indexOf(settings.quality.level);
+    const ceiling = target < 0 ? 1 : target;
+
     if (this.lastQualityCheckMs === 0) {
-      this.effectiveQuality = target;
+      this.qualityIndex = ceiling;
       this.lastQualityCheckMs = nowMs;
     }
-    if (nowMs - this.lastQualityCheckMs >= QUALITY_CHECK_MS) {
+
+    if (settings.quality.auto && nowMs - this.lastQualityCheckMs >= QUALITY_CHECK_MS) {
       this.lastQualityCheckMs = nowMs;
       if (this.fps < FPS_FLOOR) {
-        this.effectiveQuality = Math.max(QUALITY_MIN, this.effectiveQuality - QUALITY_STEP);
+        this.highFpsStreak = 0;
         this.lowFpsStreak++;
-        // Снимаем конвейер только когда снижать уже нечего и провал устойчивый.
-        if (this.effectiveQuality <= QUALITY_MIN && this.lowFpsStreak >= 3) this.postAllowed = false;
+        if (this.lowFpsStreak >= DOWNGRADE_STREAK) {
+          this.lowFpsStreak = 0;
+          // Ступень ниже самого низкого уровня — снять цепочку целиком.
+          if (this.qualityIndex > 0) this.qualityIndex--;
+          else this.postAllowed = false;
+        }
       } else if (this.fps > FPS_CEILING) {
         this.lowFpsStreak = 0;
-        if (this.effectiveQuality < target) {
-          this.effectiveQuality = Math.min(target, this.effectiveQuality + QUALITY_STEP);
-        } else {
-          this.postAllowed = true;
+        this.highFpsStreak++;
+        if (this.highFpsStreak >= UPGRADE_STREAK) {
+          this.highFpsStreak = 0;
+          if (!this.postAllowed) this.postAllowed = true;
+          else if (this.qualityIndex < ceiling) this.qualityIndex++;
         }
       } else {
         this.lowFpsStreak = 0;
+        this.highFpsStreak = 0;
       }
     }
-    this.effectiveQuality = Math.min(this.effectiveQuality, target);
-    this.genre.setQuality(this.effectiveQuality);
+
+    // Ручной выбор всегда потолок: авто может только опустить, но не поднять выше.
+    this.qualityIndex = Math.min(this.qualityIndex, ceiling);
+    if (!settings.quality.auto) {
+      this.qualityIndex = ceiling;
+      this.postAllowed = true;
+    }
+
+    this.post.setQuality(QUALITY_ORDER[this.qualityIndex]);
+    this.genre.setQuality(this.post.qualityPreset.raymarch);
   }
 
   private trackFps(deltaMs: number): void {
@@ -447,12 +477,17 @@ function sceneConfig(settings: Settings): SceneConfig {
     chromaticBurst: t.chromaticBurst,
     slice: t.slice,
     pressureWave: t.pressureWave,
-    deformation: settings.deformation.enabled ? clamp01(settings.deformation.amount) : 0,
+    // Деформации тоже участвуют в укачивании, поэтому мастер движения их гасит.
+    deformation: settings.deformation.enabled
+      ? clamp01(settings.deformation.amount) * clamp01(settings.motion.amount)
+      : 0,
     cut: settings.camera.enabled && settings.camera.cut,
     feedback: clamp01(settings.memory.feedback),
     smear: clamp01(settings.memory.smear),
     ghosts: settings.memory.ghosts,
     flare: settings.light.flare,
+    budget: Math.max(0, settings.motion.budget),
+    motion: clamp01(settings.motion.amount),
   };
 }
 

@@ -4,6 +4,9 @@
  */
 
 import { defaultTuning, type PaletteTuning } from './render/palette.ts';
+import { QUALITY_ORDER, type QualityLevel } from './render/post-pass.ts';
+import type { FontMoodKey } from './ui/fonts.ts';
+import type { LyricsAnimation } from './ui/lyrics-overlay.ts';
 import { PARTICLE_TYPES, type ParticleType } from './render/particles.ts';
 import { ALL_PRIMITIVE_IDS, type PrimitiveId } from './render/primitives/types.ts';
 
@@ -46,8 +49,28 @@ export interface Settings {
     manual: PrimitiveId[];
     /** Множитель скорости морфинга между состояниями, 0.2..3. */
     morphRate: number;
-    /** Доля разрешения для raymarch-шейдера, 0.25..1. */
-    quality: number;
+  };
+  motion: {
+    /**
+     * Общий множитель амплитуды движения: камера, тряска, толчки, деформации.
+     * Камера вместе с деформациями и тряской на полной амплитуде укачивает —
+     * эта ручка гасит всё разом.
+     */
+    amount: number;
+    /**
+     * Потолок суммарной активности эффектов. Группы конкурируют за него по
+     * уместности, иначе всё работающее на полную сразу даёт кашу. 0 — снять.
+     */
+    budget: number;
+  };
+  quality: {
+    /**
+     * Уровень качества всей пост-цепочки. Каждый проход стоит кадров, поэтому
+     * уровень меняет их согласованно, а не какой-то один параметр.
+     */
+    level: QualityLevel;
+    /** Автоснижение при устойчивой просадке fps. */
+    auto: boolean;
   };
   palette: {
     /** Гармоническая схема; 'auto' — её выбирает seed трека. */
@@ -137,16 +160,32 @@ export interface Settings {
     useForPalette: boolean;
     /** Показывать обложку фоном. */
     useAsBackground: boolean;
-    /** Показывать карточку «сейчас играет». */
-    showCard: boolean;
+    /**
+     * Режим карточки «сейчас играет»: показать на смену трека и убрать,
+     * держать всегда мелко в углу, или не показывать вовсе.
+     */
+    card: 'on-change' | 'always' | 'never';
+    /** Тонкая линия прогресса трека по нижней кромке экрана. */
+    progressLine: boolean;
   };
   lyrics: {
     enabled: boolean;
     fontSize: number;
-    position: 'bottom' | 'center';
+    position: 'bottom' | 'center' | 'top';
     mode: 'karaoke' | 'lines';
-    /** 'auto' — цвет из текущей палитры, иначе CSS-цвет. */
+    /** 'auto' — цвет из текущей палитры с проверкой контраста, иначе CSS-цвет. */
     color: string;
+    /** 'auto' — гарнитура выбирается по характеру трека. */
+    font: 'auto' | FontMoodKey;
+    /** Схема появления строки. */
+    animation: LyricsAnimation;
+    /**
+     * 'max' — плотная подложка для тех, кто реально подпевает;
+     * 'auto' — лёгкая, чтобы не перекрывать картинку.
+     */
+    readability: 'auto' | 'max';
+    /** Вести вес шрифта и трекинг за музыкой. */
+    reactive: boolean;
   };
   debug: boolean;
 }
@@ -178,7 +217,14 @@ export function defaultSettings(): Settings {
       mode: 'auto',
       manual: ['flow-field', 'metaballs'],
       morphRate: 1,
-      quality: 0.5,
+    },
+    motion: {
+      amount: 1,
+      budget: 2.4,
+    },
+    quality: {
+      level: 'medium',
+      auto: true,
     },
     palette: {
       harmonyId: 'auto',
@@ -232,7 +278,8 @@ export function defaultSettings(): Settings {
     cover: {
       useForPalette: true,
       useAsBackground: false,
-      showCard: true,
+      card: 'on-change',
+      progressLine: true,
     },
     lyrics: {
       enabled: true,
@@ -240,6 +287,10 @@ export function defaultSettings(): Settings {
       position: 'bottom',
       mode: 'karaoke',
       color: 'auto',
+      font: 'auto',
+      animation: 'auto',
+      readability: 'auto',
+      reactive: true,
     },
     debug: false,
   };
@@ -285,6 +336,22 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
     },
   },
   {
+    id: 'calm-camera',
+    name: 'Спокойная камера',
+    apply: (s) => {
+      // Ровно про укачивание: движение и деформации приглушены, всё остальное
+      // остаётся как есть.
+      s.motion.amount = 0.35;
+      s.motion.budget = 1.6;
+      s.camera.amount = 0.4;
+      s.camera.cut = false;
+      s.deformation.amount = 0.3;
+      s.transients.shake = false;
+      s.transients.punchZoom = false;
+      s.memory.smear = 0.2;
+    },
+  },
+  {
     id: 'calm-background',
     name: 'Спокойный фон',
     apply: (s) => {
@@ -323,6 +390,8 @@ export function mergeSettings(saved: unknown): Settings {
   mergeSection(base.audio, source.audio);
   mergeSection(base.camera, source.camera);
   mergeSection(base.generator, source.generator);
+  mergeSection(base.motion, source.motion);
+  mergeSection(base.quality, source.quality);
   mergeSection(base.transients, source.transients);
   mergeSection(base.deformation, source.deformation);
   mergeSection(base.particles, source.particles);
@@ -345,6 +414,7 @@ export function mergeSettings(saved: unknown): Settings {
   base.particles.manual = base.particles.manual.filter((id) => PARTICLE_TYPES.includes(id));
   if (base.particles.manual.length === 0) base.particles.manual = ['dust'];
   base.transients.maxFlashHz = Math.min(MAX_SAFE_FLASH_HZ, Math.max(0, base.transients.maxFlashHz));
+  if (!QUALITY_ORDER.includes(base.quality.level)) base.quality.level = 'medium';
   return base;
 }
 

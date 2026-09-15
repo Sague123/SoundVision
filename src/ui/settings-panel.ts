@@ -4,7 +4,10 @@
  */
 
 import { HARMONY_SCHEMES } from '../render/palette.ts';
+import type { QualityLevel } from '../render/post-pass.ts';
 import { PARTICLE_LABELS, PARTICLE_TYPES } from '../render/particles.ts';
+import { FONT_CHOICES, type FontMoodKey } from './fonts.ts';
+import { LYRICS_ANIMATIONS, type LyricsAnimation } from './lyrics-overlay.ts';
 import { ALL_PRIMITIVE_IDS, PRIMITIVE_LABELS, type PrimitiveId } from '../render/primitives/types.ts';
 import { MAX_SAFE_FLASH_HZ, PRESET_PROFILES, type Settings } from '../settings.ts';
 import {
@@ -26,6 +29,8 @@ export interface PanelStatus {
   substance: string;
   harmony: string;
   particles: string;
+  budget: string;
+  fonts: string;
 }
 
 export interface SettingsPanelHandlers {
@@ -91,11 +96,13 @@ export class SettingsPanel {
       ['Гармония', status.harmony],
       ['Примитивы', status.primitives || '—'],
       ['Частицы', status.particles || '—'],
+      ['Бюджет', status.budget],
       ['Seed', status.seed],
       ['Источник', status.source],
       ['Spotify', status.spotify],
       ['YT Music', status.bridge],
       ['Текст', status.lyrics],
+      ['Гарнитуры', status.fonts],
     ];
     this.statusBox.replaceChildren();
     for (const [label, value] of rows) {
@@ -200,13 +207,47 @@ export class SettingsPanel {
         label: 'Скорость морфинга', min: 0.2, max: 3, step: 0.05,
         get: () => s.generator.morphRate, set: (v) => { s.generator.morphRate = v; },
       })),
-      this.track(slider({
-        label: 'Качество raymarch', min: 0.3, max: 1, step: 0.05,
-        get: () => s.generator.quality, set: (v) => { s.generator.quality = v; },
-        format: (v) => `${Math.round(v * 100)}%`,
-      })),
       row(button('Reshuffle', () => this.handlers.onReshuffle(), 'panel__button--accent')),
       note('Reshuffle даёт тому же треку новую стартовую точку генератора.'),
+    ));
+
+    this.body.append(section(
+      'Движение и бюджет',
+      note('Амплитуда гасит камеру, тряску, толчки и деформации разом — это ручка '
+        + 'против укачивания. Бюджет ограничивает суммарную активность: группы '
+        + 'конкурируют за него по уместности, чтобы не получалась каша.'),
+      this.track(slider({
+        label: 'Амплитуда движения', min: 0, max: 1, step: 0.02,
+        get: () => s.motion.amount, set: (v) => { s.motion.amount = v; },
+        format: (v) => `${Math.round(v * 100)}%`,
+      })),
+      this.track(slider({
+        label: 'Бюджет интенсивности', min: 0, max: 5, step: 0.1,
+        get: () => s.motion.budget, set: (v) => { s.motion.budget = v; },
+        format: (v) => (v > 0 ? v.toFixed(1) : 'без лимита'),
+      })),
+    ));
+
+    this.body.append(section(
+      'Качество',
+      note('Уровень меняет разрешение свечения, число проходов размытия, выборки лучей, '
+        + 'контровой свет и разрешение raymarch — согласованно, а не по одному параметру.'),
+      this.track(select({
+        label: 'Уровень',
+        options: [
+          { value: 'low', label: 'Низкое' },
+          { value: 'medium', label: 'Среднее' },
+          { value: 'high', label: 'Высокое' },
+        ],
+        get: () => s.quality.level,
+        set: (v: QualityLevel) => { s.quality.level = v; },
+      })),
+      this.track(toggle({
+        label: 'Автоснижение при просадке',
+        get: () => s.quality.auto,
+        set: (v) => { s.quality.auto = v; },
+      })),
+      note('Ручной выбор — это потолок: авто может опустить уровень, но не поднять выше него.'),
     ));
 
     this.body.append(section(
@@ -426,10 +467,6 @@ export class SettingsPanel {
         set: (v) => { s.cover.useAsBackground = v; },
       })),
       this.track(toggle({
-        label: 'Карточка «сейчас играет»', get: () => s.cover.showCard,
-        set: (v) => { s.cover.showCard = v; },
-      })),
-      this.track(toggle({
         label: 'Spotify', get: () => s.sources.spotify, set: (v) => { s.sources.spotify = v; },
       })),
       row(
@@ -458,7 +495,11 @@ export class SettingsPanel {
       })),
       this.track(select({
         label: 'Позиция',
-        options: [{ value: 'bottom', label: 'Внизу' }, { value: 'center', label: 'По центру' }],
+        options: [
+          { value: 'bottom', label: 'Внизу' },
+          { value: 'center', label: 'По центру' },
+          { value: 'top', label: 'Вверху' },
+        ],
         get: () => s.lyrics.position, set: (v) => { s.lyrics.position = v; },
       })),
       this.track(select({
@@ -466,12 +507,63 @@ export class SettingsPanel {
         options: [{ value: 'karaoke', label: 'Караоке (по словам)' }, { value: 'lines', label: 'Построчно' }],
         get: () => s.lyrics.mode, set: (v) => { s.lyrics.mode = v; },
       })),
+      this.track(select({
+        label: 'Гарнитура',
+        options: [
+          { value: 'auto', label: 'Авто (по характеру трека)' },
+          ...FONT_CHOICES.map((font) => ({ value: font.id, label: `${font.name} — ${font.description}` })),
+        ],
+        get: () => s.lyrics.font,
+        set: (v: 'auto' | FontMoodKey) => { s.lyrics.font = v; },
+      })),
+      this.track(select({
+        label: 'Появление',
+        options: LYRICS_ANIMATIONS,
+        get: () => s.lyrics.animation,
+        set: (v: LyricsAnimation) => { s.lyrics.animation = v; },
+      })),
+      this.track(select({
+        label: 'Читаемость',
+        options: [
+          { value: 'auto', label: 'Обычная подложка' },
+          { value: 'max', label: 'Максимальная (плотная)' },
+        ],
+        get: () => s.lyrics.readability,
+        set: (v: 'auto' | 'max') => { s.lyrics.readability = v; },
+      })),
+      this.track(toggle({
+        label: 'Реакция на музыку',
+        get: () => s.lyrics.reactive, set: (v) => { s.lyrics.reactive = v; },
+      })),
+      note('Реакция ведёт вес шрифта энергией и слегка расширяет трекинг на пиках. '
+        + 'Работает только на variable fonts.'),
       this.track(toggle({
         label: 'Цвет из палитры',
         get: () => s.lyrics.color === 'auto',
         set: (v) => { s.lyrics.color = v ? 'auto' : '#ffffff'; },
       })),
       this.track(colorField('Свой цвет', () => s.lyrics.color, (v) => { s.lyrics.color = v; })),
+      note('Автоцвет проверяет контраст со средней яркостью кадра — белого текста '
+        + 'на светлом кадре не будет.'),
+    ));
+
+    this.body.append(section(
+      'Карточка трека',
+      this.track(select({
+        label: 'Показывать',
+        options: [
+          { value: 'on-change', label: 'При смене трека' },
+          { value: 'always', label: 'Всегда мелко в углу' },
+          { value: 'never', label: 'Никогда' },
+        ],
+        get: () => s.cover.card,
+        set: (v: 'on-change' | 'always' | 'never') => { s.cover.card = v; },
+      })),
+      this.track(toggle({
+        label: 'Линия прогресса трека',
+        get: () => s.cover.progressLine, set: (v) => { s.cover.progressLine = v; },
+      })),
+      note('Если текст песни внизу, карточка сама уходит наверх.'),
     ));
 
     this.body.append(section(

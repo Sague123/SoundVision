@@ -134,14 +134,25 @@ body.idle {
   left: 0;
   right: 0;
   bottom: 7vh;
-  display: grid;
-  padding: 0 6vw;
-  text-align: center;
+  display: flex;
+  justify-content: center;
+  padding: 0 5vw;
   pointer-events: none;
   --lyrics-size: 44px;
   --lyrics-color: #fff;
+  --lyrics-dim: rgba(255, 255, 255, 0.45);
   --lyrics-glow: #fff;
+  --lyrics-glow-size: 26px;
+  --lyrics-plate: #000;
+  --lyrics-shadow: rgba(0, 0, 0, 0.78);
+  --lyrics-font: system-ui, sans-serif;
+  --lyrics-weight: 650;
+  --lyrics-tracking: 0;
+  --lyrics-transform: none;
+  --lyrics-style: normal;
+  --lyrics-nudge: 0px;
   --lyrics-progress: 0%;
+  transition: opacity 0.4s ease;
 }
 
 .lyrics--center {
@@ -150,34 +161,138 @@ body.idle {
   transform: translateY(-50%);
 }
 
+.lyrics--top {
+  top: 7vh;
+  bottom: auto;
+}
+
 .lyrics--hidden {
   opacity: 0;
 }
 
-.lyrics__line {
-  grid-area: 1 / 1;
-  font-size: var(--lyrics-size);
-  font-weight: 650;
-  line-height: 1.25;
-  color: var(--lyrics-color);
-  text-shadow: 0 0 24px color-mix(in srgb, var(--lyrics-glow) 60%, transparent),
-    0 2px 10px rgba(0, 0, 0, 0.75);
+/* Подложка: без неё текст тонет в плотном кадре. Блюр берёт фон под собой,
+   поэтому работает на любой картинке, а не только на тёмной. */
+.lyrics__plate {
+  display: grid;
+  max-width: 90vw;
+  padding: 0.35em 0.7em;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--lyrics-plate) 46%, transparent);
+  backdrop-filter: blur(16px) saturate(0.8);
+  transform: translateY(var(--lyrics-nudge));
+  transition: background 0.4s ease;
 }
 
-/* Появление текущей строки и уход предыдущей — одна и та же анимация наоборот. */
-.lyrics__line--in {
-  animation: lyrics-in 420ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+/* Режим для тех, кто реально подпевает: плотная подложка, читаемость важнее картинки. */
+.lyrics--max-readability .lyrics__plate {
+  background: color-mix(in srgb, var(--lyrics-plate) 88%, transparent);
+  backdrop-filter: blur(24px) saturate(0.6);
+}
+
+.lyrics__line {
+  grid-area: 1 / 1;
+  font-family: var(--lyrics-font);
+  font-size: var(--lyrics-size);
+  font-style: var(--lyrics-style);
+  font-weight: var(--lyrics-weight);
+  font-variation-settings: 'wght' var(--lyrics-weight);
+  letter-spacing: var(--lyrics-tracking);
+  text-transform: var(--lyrics-transform);
+  line-height: 1.24;
+  text-align: center;
+  text-wrap: balance;
+  color: var(--lyrics-color);
+  /* Обводка тенью в четыре стороны плюс мягкое свечение: читается и на светлом. */
+  text-shadow:
+    0 0 1px var(--lyrics-shadow),
+    0 1px 3px var(--lyrics-shadow),
+    0 0 var(--lyrics-glow-size) color-mix(in srgb, var(--lyrics-glow) 45%, transparent);
+}
+
+/* --- Схемы появления --- */
+
+[data-animation='soft'] .lyrics__line--in {
+  animation: lyrics-soft 520ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+[data-animation='sharp'] .lyrics__line--in {
+  animation: lyrics-sharp 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+[data-animation='dissolve'] .lyrics__line--in {
+  animation: lyrics-dissolve 900ms ease both;
+}
+
+[data-animation='stagger'] .lyrics__line--in {
+  /* Сама строка не анимируется — работают буквы. */
+  animation: none;
+  opacity: 1;
+}
+
+[data-animation='stagger'] .lyrics__line--in .lyrics__letter {
+  animation: lyrics-letter 420ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  /* Задержка по индексу буквы: 18 мс укладывается в просимые 15-25. */
+  animation-delay: calc(var(--i) * 18ms);
+}
+
+.lyrics__letter {
+  display: inline-block;
+  white-space: pre;
 }
 
 .lyrics__line--out {
   animation: lyrics-out 420ms ease both;
 }
 
-@keyframes lyrics-in {
+[data-animation='dissolve'] .lyrics__line--out {
+  animation: lyrics-dissolve-out 700ms ease both;
+}
+
+@keyframes lyrics-soft {
+  from {
+    opacity: 0;
+    transform: translateY(26px) scale(0.96);
+    filter: blur(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+/* Резкая схема: маска уезжает слева направо, blur минимальный. */
+@keyframes lyrics-sharp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+    -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 0%, transparent 6%);
+    mask-image: linear-gradient(90deg, #000 0%, #000 0%, transparent 6%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    -webkit-mask-image: linear-gradient(90deg, #000 100%, #000 130%, transparent 136%);
+    mask-image: linear-gradient(90deg, #000 100%, #000 130%, transparent 136%);
+  }
+}
+
+@keyframes lyrics-dissolve {
+  from {
+    opacity: 0;
+    filter: blur(10px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+@keyframes lyrics-letter {
   from {
     opacity: 0;
     transform: translateY(18px);
-    filter: blur(6px);
+    filter: blur(10px);
   }
   to {
     opacity: 1;
@@ -190,51 +305,120 @@ body.idle {
   from {
     opacity: 0.55;
     transform: translateY(0);
+    filter: blur(0);
   }
   to {
     opacity: 0;
-    transform: translateY(-16px);
+    transform: translateY(-18px);
+    filter: blur(8px);
   }
 }
 
-.lyrics__word {
-  color: color-mix(in srgb, var(--lyrics-color) 45%, transparent);
-  transition: color 140ms ease, text-shadow 140ms ease;
+@keyframes lyrics-dissolve-out {
+  from {
+    opacity: 0.5;
+    filter: blur(0);
+  }
+  to {
+    opacity: 0;
+    filter: blur(14px);
+  }
 }
 
-.lyrics__word--sung {
+/* --- Караоке --- */
+
+/* Слово — два наложенных слоя: приглушённая основа и яркая копия, обрезанная
+   по проценту спетого. Граница едет внутри слова, а не прыгает по словам.
+
+   Почему не background-clip: text — заливка глифа тогда становится фоном, а
+   фон красится до теней, и белая обводка ложится поверх неё. Цвет текста
+   пропадал, оставался только ореол. */
+.lyrics__word {
+  position: relative;
+  display: inline-block;
+  color: var(--lyrics-dim);
+}
+
+.lyrics__word-fill {
+  position: absolute;
+  inset: 0;
   color: var(--lyrics-color);
-  text-shadow: 0 0 26px var(--lyrics-glow), 0 2px 10px rgba(0, 0, 0, 0.8);
+  /* Обрезаем справа: видна только спетая часть слова. */
+  clip-path: inset(0 calc(100% - var(--wipe)) 0 0);
+  transition: clip-path 90ms linear;
+  white-space: pre;
+}
+
+/* Свечение — только у слова, которое поётся прямо сейчас. */
+.lyrics__word--active .lyrics__word-fill,
+.lyrics__word--active {
+  text-shadow:
+    0 0 1px var(--lyrics-shadow),
+    0 1px 3px var(--lyrics-shadow),
+    0 0 calc(var(--lyrics-glow-size) * 1.2) var(--lyrics-glow);
+}
+
+.lyrics__word--sung .lyrics__word-fill,
+.lyrics__word--sung {
+  text-shadow:
+    0 0 1px var(--lyrics-shadow),
+    0 1px 3px var(--lyrics-shadow),
+    0 0 calc(var(--lyrics-glow-size) * 0.7) color-mix(in srgb, var(--lyrics-glow) 40%, transparent);
 }
 
 /* --- Карточка «сейчас играет» --- */
 
 .now-playing {
   position: absolute;
-  top: 24px;
-  left: 24px;
+  bottom: 28px;
+  left: 28px;
   display: flex;
-  gap: 14px;
+  gap: 16px;
   align-items: center;
-  max-width: 420px;
-  padding: 12px 16px 12px 12px;
+  max-width: 460px;
+  padding: 14px 20px 14px 14px;
   border: 1px solid var(--ui-border);
-  border-radius: 14px;
-  background: rgba(6, 8, 14, 0.55);
-  backdrop-filter: blur(10px);
-  transition: opacity 0.4s ease;
+  border-radius: 18px;
+  background: rgba(6, 8, 14, 0.5);
+  backdrop-filter: blur(16px) saturate(0.9);
+  transition: opacity 0.5s ease, transform 0.5s ease, padding 0.4s ease;
 }
 
+/* Уход: растворение со сдвигом влево — обратное появлению. */
 .now-playing--hidden {
   opacity: 0;
+  transform: translateX(-24px);
   pointer-events: none;
 }
 
+.now-playing--top {
+  top: 28px;
+  bottom: auto;
+}
+
+.now-playing--enter {
+  animation: card-in 620ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateX(-48px);
+    filter: blur(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+    filter: blur(0);
+  }
+}
+
 .now-playing__cover {
-  width: 64px;
-  height: 64px;
-  border-radius: 8px;
+  width: 60px;
+  height: 60px;
+  border-radius: 12px;
   object-fit: cover;
+  transition: width 0.4s ease, height 0.4s ease;
 }
 
 .now-playing__text {
@@ -242,39 +426,74 @@ body.idle {
 }
 
 .now-playing__title {
-  font-size: 16px;
-  font-weight: 650;
+  font-size: 20px;
+  font-weight: 680;
+  letter-spacing: -0.01em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: font-size 0.4s ease;
 }
 
+/* Артист мельче и приглушённее: название — главное. */
 .now-playing__artist {
   color: var(--ui-muted);
+  font-size: 14px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .now-playing__source {
-  margin-top: 2px;
+  margin-top: 3px;
   color: var(--ui-accent);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
-.now-playing__progress {
-  margin-top: 8px;
-  height: 3px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.15);
+/* Постоянный показ: та же карточка, но мельче и тише. */
+.now-playing--compact {
+  padding: 8px 14px 8px 8px;
+  opacity: 0.55;
 }
 
-.now-playing__progress-bar {
+.now-playing--compact .now-playing__cover {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+}
+
+.now-playing--compact .now-playing__title {
+  font-size: 14px;
+}
+
+.now-playing--compact .now-playing__artist,
+.now-playing--compact .now-playing__source {
+  display: none;
+}
+
+/* Прогресс трека тонкой линией по нижней кромке экрана. */
+.track-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  transition: opacity 0.5s ease;
+}
+
+.track-progress--hidden {
+  opacity: 0;
+}
+
+.track-progress__bar {
   height: 100%;
-  border-radius: 2px;
   background: var(--ui-accent);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 0.25s linear;
 }
 
 /* --- Панель настроек --- */

@@ -17,6 +17,7 @@ import { Compositor, type CompositorStats } from './render/compositor.ts';
 import { SUBSTANCE_LABELS } from './render/scene.ts';
 import type { Settings } from './settings.ts';
 import { DebugOverlay } from './ui/debug-overlay.ts';
+import { loadFonts } from './ui/fonts.ts';
 import { LyricsOverlay } from './ui/lyrics-overlay.ts';
 import { NowPlayingCard } from './ui/now-playing-card.ts';
 import { loadSettings, saveSettings } from './ui/profiles.ts';
@@ -48,6 +49,8 @@ class App {
   private lyricsStatus = 'нет трека';
   private lyricsAbort: AbortController | null = null;
   private cursorTimer = 0;
+  /** Какие гарнитуры реально подгрузились и содержат кириллицу. */
+  private fontStatus = 'загружаются…';
   private wakeLock: WakeLockSentinel | null = null;
 
   constructor(private readonly root: HTMLElement) {
@@ -79,6 +82,7 @@ class App {
       this.canvas,
       this.lyricsOverlay.element,
       this.card.element,
+      this.card.progressLine,
       this.debugOverlay.element,
       this.panel.element,
       this.startScreen.element,
@@ -100,6 +104,7 @@ class App {
     }
     this.applySources();
     this.applyUiSettings();
+    void this.loadFonts();
     // До захвата звука рисуем на нейтральном mood vector — экран не пустой.
     this.renderIdleFrame();
   }
@@ -150,11 +155,13 @@ class App {
     const stats = this.compositor.render(mood, this.settings, this.coverLoader.art);
 
     const track = this.nowPlaying.current();
-    this.card.update(track, this.settings.cover.showCard);
+    this.card.update(track, this.settings, mood.timeMs);
     this.lyricsOverlay.update(
       this.syncEngine.locate(track?.progressMs ?? 0),
       this.settings,
       stats.palette,
+      mood,
+      stats.meanLuminance,
     );
 
     this.debugOverlay.update(mood, stats);
@@ -182,6 +189,8 @@ class App {
       substance: `${SUBSTANCE_LABELS[substance.nearest]} ${substance.axis.toFixed(2)}`,
       harmony: stats.harmonyName,
       particles: stats.transient.particleTypes.join(', '),
+      budget: `${stats.scene.budget.load.toFixed(2)} / ${stats.scene.budget.limit || '∞'}`,
+      fonts: this.fontStatus,
     });
   }
 
@@ -228,6 +237,26 @@ class App {
     else this.bridge.stop();
   }
 
+  /**
+   * Гарнитуры подключаются и сразу проверяются на кириллицу: доверять списку
+   * на слово нельзя, а русский текст без глифов молча уедет в запасной шрифт.
+   */
+  private async loadFonts(): Promise<void> {
+    try {
+      const reports = await loadFonts();
+      const missing = reports.filter((report) => !report.cyrillic).map((report) => report.name);
+      this.fontStatus = missing.length === 0
+        ? `все ${reports.length} с кириллицей`
+        : `без кириллицы: ${missing.join(', ')}`;
+      if (missing.length > 0) {
+        console.warn('[fonts] кириллица не подтвердилась:', missing.join(', '));
+      }
+    } catch (err) {
+      this.fontStatus = 'не загрузились';
+      console.warn('[fonts] не удалось загрузить гарнитуры:', err);
+    }
+  }
+
   private async connectSpotify(): Promise<void> {
     const clientId = window.prompt('Spotify Client ID', this.spotify.clientId);
     if (clientId === null) return;
@@ -243,6 +272,7 @@ class App {
     saveSettings(this.settings);
     this.applySources();
     this.applyUiSettings();
+    void this.loadFonts();
   }
 
   /**

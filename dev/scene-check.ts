@@ -333,7 +333,9 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
     const run = (shake: boolean): { x: number; y: number } => {
       const scene = new Scene();
       scene.reseed(makeSeed('тряска'));
-      const config = { ...SCENE_CONFIG, shake };
+      // Бюджет обязательно снят: он ужимает движение по суммарной нагрузке,
+      // а она у прогонов с тряской и без неё разная — база перестала бы быть чистой.
+      const config = { ...SCENE_CONFIG, shake, budget: 0 };
       let x = 0;
       let y = 0;
       for (let frame = 0; frame < 600; frame++) {
@@ -448,7 +450,7 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
   let state = scene.update(moodAt(0, {}), config);
   for (let frame = 1; frame < 120; frame++) state = scene.update(moodAt(frame * FRAME_MS, {}), config);
   const noLight = {
-    bloom: 0, bloomThreshold: 0.5, rays: 0, rim: 0,
+    bloom: 0, bloomThreshold: 0.5, rays: 0, rim: 0, whitePoint: 1.6,
     lightColour: [1, 1, 1] as [number, number, number],
     rimColour: [1, 1, 1] as [number, number, number],
   };
@@ -632,6 +634,84 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
   const dense = countFor(1);
   check('плотность управляет количеством частиц', dense > sparse * 1.5,
     `${sparse} против ${dense}`);
+}
+
+// --- 16. Бюджет интенсивности ------------------------------------------------
+{
+  /** Прогон «всё на полную»: каждая группа просит максимум. */
+  const runWith = (budget: number) => {
+    const scene = new Scene();
+    scene.reseed(makeSeed('бюджет'));
+    const config = { ...SCENE_CONFIG, budget };
+    let state = scene.update(moodAt(0, {}), config);
+    for (let frame = 1; frame < 600; frame++) {
+      const timeMs = frame * FRAME_MS;
+      const hit = frame % 10 === 0;
+      state = scene.update(moodAt(timeMs, {
+        energy: 0.95, noisiness: 0.95, brightness: 0.9, flux: 0.8, section: 'drop',
+        beatPhase: ((timeMs / 1000) * 2) % 1,
+        onset: hit,
+        onsetStrength: hit ? 0.95 : 0,
+        onsetProfile: hit ? { low: 1, mid: 0.6, high: 0.3 } : { low: 0, mid: 0, high: 0 },
+      }), config);
+    }
+    return state;
+  };
+
+  const unlimited = runWith(0);
+  check('без лимита нагрузка превышает бюджет', unlimited.budget.load > 2.4,
+    `нагрузка ${unlimited.budget.load.toFixed(2)}`);
+  check('без лимита ничего не ужимается', unlimited.budget.scale.impact === 1, 'ужатие есть');
+
+  const limited = runWith(2);
+  const scales = limited.budget.scale;
+  check('бюджет ужимает эффекты',
+    scales.deformation < 1 || scales.impact < 1 || scales.memory < 1 || scales.motion < 1,
+    `деф ${scales.deformation.toFixed(2)} удар ${scales.impact.toFixed(2)}`
+    + ` пам ${scales.memory.toFixed(2)} движ ${scales.motion.toFixed(2)}`);
+
+  // Суммарная нагрузка после ужатия действительно укладывается в лимит.
+  const after = (limited.deformation.domainWarp + limited.deformation.twist
+    + limited.deformation.wave + limited.deformation.turbulence
+    + limited.deformation.melt + limited.deformation.fold) / 2.2
+    + Math.abs(limited.impact.lensPulse) + limited.impact.chromaticBurst + limited.impact.slice
+    + (limited.impact.shockwaves.length + limited.impact.ripples.length) * 0.25
+    + limited.memory.feedbackAmount + limited.memory.smear
+    + (Math.abs(limited.camera.x) + Math.abs(limited.camera.y)) * 6
+    + Math.abs(limited.camera.roll) * 5 + Math.abs(limited.camera.zoom - 1) * 2.5;
+  check('после ужатия нагрузка укладывается в лимит', after <= 2.05,
+    `осталось ${after.toFixed(2)} при лимите 2`);
+
+  // Удары уместнее прочего в момент удара, поэтому ужимаются меньше.
+  check('в момент ударов импакт ужимается слабее деформаций',
+    scales.impact >= scales.deformation,
+    `удар ${scales.impact.toFixed(2)} против деф ${scales.deformation.toFixed(2)}`);
+}
+
+// --- 17. Мастер амплитуды движения -------------------------------------------
+{
+  const motionLoad = (motion: number): number => {
+    const scene = new Scene();
+    scene.reseed(makeSeed('амплитуда'));
+    const config = { ...SCENE_CONFIG, motion, budget: 0 };
+    let total = 0;
+    for (let frame = 0; frame < 600; frame++) {
+      const hit = frame % 10 === 0;
+      const camera = scene.update(moodAt(frame * FRAME_MS, {
+        energy: 0.9, section: 'drop',
+        onset: hit,
+        onsetStrength: hit ? 0.9 : 0,
+        onsetProfile: hit ? { low: 1, mid: 0.5, high: 0.2 } : { low: 0, mid: 0, high: 0 },
+      }), config).camera;
+      total += Math.abs(camera.x) + Math.abs(camera.y) + Math.abs(camera.roll);
+    }
+    return total;
+  };
+
+  const full = motionLoad(1);
+  const calm = motionLoad(0.35);
+  check('мастер амплитуды гасит движение камеры', calm < full * 0.75,
+    `полная ${full.toFixed(1)}, спокойная ${calm.toFixed(1)}`);
 }
 
 console.log(failures === 0 ? '\nвсё сошлось' : `\nпроблем: ${failures}`);

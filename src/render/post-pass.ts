@@ -282,15 +282,19 @@ uniform vec2 uResolution;
 
 uniform float uBloomIntensity;
 uniform float uRays;
+uniform int uRaySamples;
 uniform float uRim;
 uniform float uFlare;
 uniform float uExposure;
 uniform float uVignette;
+/** Точка белого расширенного Рейнхарда: яркость, которая станет единицей. */
+uniform float uWhitePoint;
 uniform vec2 uLightPos;
 uniform vec3 uLightColour;
 uniform vec3 uRimColour;
 
-const int RAY_SAMPLES = 14;
+/** Потолок цикла лучей: сам счётчик приходит уравнением качества. */
+const int MAX_RAY_SAMPLES = 20;
 
 float luminance(vec3 c) {
   return dot(c, vec3(0.2126, 0.7152, 0.0722));
@@ -306,16 +310,17 @@ void main() {
 
   // --- Объёмные лучи: радиальное накопление яркой части к источнику ---
   if (uRays > 0.001) {
-    vec2 delta = (uv - uLightPos) / float(RAY_SAMPLES) * 0.7;
+    vec2 delta = (uv - uLightPos) / float(uRaySamples) * 0.7;
     vec2 sampleUv = uv;
     float decay = 1.0;
     vec3 rays = vec3(0.0);
-    for (int i = 0; i < RAY_SAMPLES; i++) {
+    for (int i = 0; i < MAX_RAY_SAMPLES; i++) {
+      if (i >= uRaySamples) break;
       sampleUv -= delta;
       rays += texture(uBloom, clamp(sampleUv, 0.0, 1.0)).rgb * decay;
       decay *= 0.86;
     }
-    colour += rays * (uRays / float(RAY_SAMPLES)) * uLightColour * 2.4;
+    colour += rays * (uRays / float(uRaySamples)) * uLightColour * 2.4;
   }
 
   // --- Контровой свет: подсветка силуэтов со стороны источника ---
@@ -358,10 +363,40 @@ void main() {
   float vignette = 1.0 - uVignette * smoothstep(0.35, 1.25, radius);
   colour *= vignette;
 
-  // Мягкое сжатие вместо обрезания: кадр не должен выгорать в белое.
-  colour = colour / (1.0 + max(vec3(0.0), colour - 0.85) * 1.6);
+  // Расширенный тон-маппинг Рейнхарда — последний рубеж всей цепочки.
+  // Обычный Рейнхард никогда не доводит до единицы и делает кадр вялым;
+  // расширенный отображает uWhitePoint ровно в 1, сохраняя яркие места.
+  vec3 numerator = colour * (1.0 + colour / (uWhitePoint * uWhitePoint));
+  colour = numerator / (1.0 + colour);
   fragColor = vec4(clamp(colour, 0.0, 1.0), 1.0);
 }`;
+
+/**
+ * Градация качества всей цепочки. Каждый проход стоит кадров, поэтому
+ * снижать нужно не что-то одно, а всё сразу и согласованно.
+ */
+export type QualityLevel = 'low' | 'medium' | 'high';
+
+export interface QualityPreset {
+  /** Доля разрешения для буферов bloom. */
+  bloomScale: number;
+  /** Сколько раз повторяется пара горизонталь/вертикаль. */
+  blurPasses: number;
+  /** Число выборок объёмных лучей. */
+  raySamples: number;
+  /** Разрешено ли считать контровой свет. */
+  rim: boolean;
+  /** Доля разрешения для raymarch-примитива. */
+  raymarch: number;
+}
+
+export const QUALITY_PRESETS: Record<QualityLevel, QualityPreset> = {
+  low: { bloomScale: 0.18, blurPasses: 1, raySamples: 6, rim: false, raymarch: 0.3 },
+  medium: { bloomScale: 0.25, blurPasses: 1, raySamples: 12, rim: true, raymarch: 0.5 },
+  high: { bloomScale: 0.34, blurPasses: 2, raySamples: 20, rim: true, raymarch: 0.75 },
+};
+
+export const QUALITY_ORDER: QualityLevel[] = ['low', 'medium', 'high'];
 
 export interface LightSettings {
   /** Сила bloom, 0..1. */
@@ -373,12 +408,11 @@ export interface LightSettings {
   /** Цвет света и контрового света в 0..1. */
   lightColour: Rgb01;
   rimColour: Rgb01;
+  /** Точка белого тон-маппинга: во что отображается «самое яркое». */
+  whitePoint: number;
 }
 
 export type Rgb01 = [number, number, number];
-
-/** Размер буферов bloom относительно кадра. Четверть — обычный компромисс. */
-const BLOOM_SCALE = 0.25;
 
 export class PostPass {
   private canvas: HTMLCanvasElement | null = null;
@@ -389,11 +423,16 @@ export class PostPass {
   private compositeProgram: WebGLProgram | null = null;
 
   private sceneTexture: WebGLTexture | null = null;
-  private warpTexture: WebGLTexture | null = null;
-  private feedbackTexture: WebGLTexture | null = null;
+  /**
+   * Два кадровых буфера, между которыми идёт ping-pong: варп пишет в один и
+   * читает другой как обратную связь. Копировать кадр не нужно вовсе —
+   * достаточно поменять индекс.
+   */
+  private frameTextures: Array<WebGLTexture | null> = [null, null];
+  private frameFbos: Array<WebGLFramebuffer | null> = [null, null];
+  private writeIndex = 0;
   private bloomTextureA: WebGLTexture | null = null;
   private bloomTextureB: WebGLTexture | null = null;
-  private warpFbo: WebGLFramebuffer | null = null;
   private bloomFboA: WebGLFramebuffer | null = null;
   private bloomFboB: WebGLFramebuffer | null = null;
 
@@ -406,6 +445,7 @@ export class PostPass {
   private height = 1;
   private bloomWidth = 1;
   private bloomHeight = 1;
+  private quality: QualityPreset = QUALITY_PRESETS.medium;
   private unavailable = false;
   /** До первого кадра в буфере обратной связи мусор — подмешивать его нельзя. */
   private feedbackReady = false;
@@ -418,11 +458,24 @@ export class PostPass {
     return !this.unavailable;
   }
 
+  /** @returns true, если уровень изменился и буферы пересобраны. */
+  setQuality(level: QualityLevel): boolean {
+    const preset = QUALITY_PRESETS[level];
+    if (preset === this.quality) return false;
+    this.quality = preset;
+    this.resize(this.width, this.height);
+    return true;
+  }
+
+  get qualityPreset(): QualityPreset {
+    return this.quality;
+  }
+
   resize(width: number, height: number): void {
     this.width = width;
     this.height = height;
-    this.bloomWidth = Math.max(1, Math.round(width * BLOOM_SCALE));
-    this.bloomHeight = Math.max(1, Math.round(height * BLOOM_SCALE));
+    this.bloomWidth = Math.max(1, Math.round(width * this.quality.bloomScale));
+    this.bloomHeight = Math.max(1, Math.round(height * this.quality.bloomScale));
     if (this.unavailable) return;
     if (!this.canvas) this.init();
     if (!this.canvas || !this.gl) return;
@@ -473,6 +526,9 @@ export class PostPass {
     this.runBloom(gl, light);
     this.runComposite(gl, lightState, light);
 
+    // Следующий кадр будет читать этот как обратную связь.
+    this.writeIndex ^= 1;
+    this.feedbackReady = true;
     return canvas;
   }
 
@@ -483,12 +539,11 @@ export class PostPass {
         if (program) gl.deleteProgram(program);
       }
       for (const texture of [
-        this.sceneTexture, this.warpTexture, this.feedbackTexture,
-        this.bloomTextureA, this.bloomTextureB,
+        this.sceneTexture, ...this.frameTextures, this.bloomTextureA, this.bloomTextureB,
       ]) {
         if (texture) gl.deleteTexture(texture);
       }
-      for (const fbo of [this.warpFbo, this.bloomFboA, this.bloomFboB]) {
+      for (const fbo of [...this.frameFbos, this.bloomFboA, this.bloomFboB]) {
         if (fbo) gl.deleteFramebuffer(fbo);
       }
     }
@@ -504,9 +559,14 @@ export class PostPass {
     memory: Memory,
     fovLens: number,
   ): void {
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.warpFbo);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.frameFbos[this.writeIndex]);
     gl.viewport(0, 0, this.width, this.height);
     gl.useProgram(this.warpProgram);
+
+    // Обратная связь читается из второго буфера пары.
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.frameTextures[this.writeIndex ^ 1]);
+    gl.activeTexture(gl.TEXTURE0);
 
     const u = this.warpUniforms;
     gl.uniform2f(u.uResolution!, this.width, this.height);
@@ -536,13 +596,6 @@ export class PostPass {
     gl.uniform1i(u.uRippleCount!, rippleCount);
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-    // Результат уходит в буфер обратной связи для следующего кадра.
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.feedbackTexture);
-    gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, this.width, this.height);
-    gl.activeTexture(gl.TEXTURE0);
-    this.feedbackReady = true;
   }
 
   /** Шаги 2-3: яркостный срез и два прохода размытия в четверти разрешения. */
@@ -552,7 +605,7 @@ export class PostPass {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomFboA);
     gl.useProgram(this.brightProgram);
     gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, this.warpTexture);
+    gl.bindTexture(gl.TEXTURE_2D, this.frameTextures[this.writeIndex]);
     gl.uniform1i(this.brightUniforms.uTexture!, 2);
     gl.uniform2f(this.brightUniforms.uResolution!, this.bloomWidth, this.bloomHeight);
     gl.uniform1f(this.brightUniforms.uThreshold!, light.bloomThreshold);
@@ -562,16 +615,21 @@ export class PostPass {
     gl.uniform2f(this.blurUniforms.uResolution!, this.bloomWidth, this.bloomHeight);
     gl.uniform1i(this.blurUniforms.uTexture!, 3);
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomFboB);
-    gl.activeTexture(gl.TEXTURE3);
-    gl.bindTexture(gl.TEXTURE_2D, this.bloomTextureA);
-    gl.uniform2f(this.blurUniforms.uDirection!, 1, 0);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    // Каждый проход расширяет радиус вдвое: два прохода дают мягкий широкий
+    // ореол, один — экономный узкий.
+    for (let pass = 0; pass < this.quality.blurPasses; pass++) {
+      const spread = 1 + pass * 2;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomFboB);
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, this.bloomTextureA);
+      gl.uniform2f(this.blurUniforms.uDirection!, spread, 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomFboA);
-    gl.bindTexture(gl.TEXTURE_2D, this.bloomTextureB);
-    gl.uniform2f(this.blurUniforms.uDirection!, 0, 1);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomFboA);
+      gl.bindTexture(gl.TEXTURE_2D, this.bloomTextureB);
+      gl.uniform2f(this.blurUniforms.uDirection!, 0, spread);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
   }
 
   /** Шаг 4: сведение света на экранный холст. */
@@ -581,7 +639,7 @@ export class PostPass {
     gl.useProgram(this.compositeProgram);
 
     gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, this.warpTexture);
+    gl.bindTexture(gl.TEXTURE_2D, this.frameTextures[this.writeIndex]);
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, this.bloomTextureA);
 
@@ -591,7 +649,9 @@ export class PostPass {
     gl.uniform2f(u.uResolution!, this.width, this.height);
     gl.uniform1f(u.uBloomIntensity!, light.bloom);
     gl.uniform1f(u.uRays!, light.rays);
-    gl.uniform1f(u.uRim!, light.rim);
+    gl.uniform1i(u.uRaySamples!, this.quality.raySamples);
+    gl.uniform1f(u.uRim!, this.quality.rim ? light.rim : 0);
+    gl.uniform1f(u.uWhitePoint!, light.whitePoint);
     gl.uniform1f(u.uFlare!, state.flare);
     gl.uniform1f(u.uExposure!, state.exposure);
     gl.uniform1f(u.uVignette!, state.vignette);
@@ -646,8 +706,8 @@ export class PostPass {
     this.brightUniforms = collectUniforms(gl, brightProgram, ['uTexture', 'uResolution', 'uThreshold']);
     this.blurUniforms = collectUniforms(gl, blurProgram, ['uTexture', 'uResolution', 'uDirection']);
     this.compositeUniforms = collectUniforms(gl, compositeProgram, [
-      'uScene', 'uBloom', 'uResolution', 'uBloomIntensity', 'uRays', 'uRim',
-      'uFlare', 'uExposure', 'uVignette', 'uLightPos', 'uLightColour', 'uRimColour',
+      'uScene', 'uBloom', 'uResolution', 'uBloomIntensity', 'uRays', 'uRaySamples', 'uRim',
+      'uFlare', 'uExposure', 'uVignette', 'uWhitePoint', 'uLightPos', 'uLightColour', 'uRimColour',
     ]);
 
     gl.useProgram(warpProgram);
@@ -655,11 +715,10 @@ export class PostPass {
     gl.uniform1i(this.warpUniforms.uFeedback!, 1);
 
     this.sceneTexture = createTexture(gl);
-    this.warpTexture = createTexture(gl);
-    this.feedbackTexture = createTexture(gl);
+    this.frameTextures = [createTexture(gl), createTexture(gl)];
+    this.frameFbos = [gl.createFramebuffer(), gl.createFramebuffer()];
     this.bloomTextureA = createTexture(gl);
     this.bloomTextureB = createTexture(gl);
-    this.warpFbo = gl.createFramebuffer();
     this.bloomFboA = gl.createFramebuffer();
     this.bloomFboB = gl.createFramebuffer();
 
@@ -674,12 +733,13 @@ export class PostPass {
     const gl = this.gl;
     if (!gl) return;
 
-    allocate(gl, this.warpTexture, this.width, this.height);
-    allocate(gl, this.feedbackTexture, this.width, this.height);
+    for (let i = 0; i < 2; i++) {
+      allocate(gl, this.frameTextures[i], this.width, this.height);
+      attach(gl, this.frameFbos[i], this.frameTextures[i]);
+    }
     allocate(gl, this.bloomTextureA, this.bloomWidth, this.bloomHeight);
     allocate(gl, this.bloomTextureB, this.bloomWidth, this.bloomHeight);
 
-    attach(gl, this.warpFbo, this.warpTexture);
     attach(gl, this.bloomFboA, this.bloomTextureA);
     attach(gl, this.bloomFboB, this.bloomTextureB);
 

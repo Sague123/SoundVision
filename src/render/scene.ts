@@ -245,6 +245,27 @@ interface PendingEcho {
   profile: BandProfile;
 }
 
+/**
+ * Бюджет интенсивности: сколько визуальной активности сцена себе позволяет.
+ *
+ * Без него все эффекты, работающие на полную одновременно, дают кашу. Группы
+ * конкурируют за общий лимит по уместности: удары получают больше, когда бьют,
+ * деформации — когда материал шумный, память — на дропе.
+ */
+export interface BudgetState {
+  /** Запрошенная суммарная активность. */
+  load: number;
+  /** Лимит, 0 — не ограничивать. */
+  limit: number;
+  /** Во сколько раз пришлось ужать каждую группу, 1 — не ужимали. */
+  scale: {
+    deformation: number;
+    impact: number;
+    memory: number;
+    motion: number;
+  };
+}
+
 export interface SceneState {
   substance: Substance;
   light: Light;
@@ -256,6 +277,7 @@ export interface SceneState {
   /** Суммарная энергия волн прямо сейчас, 0..1 — общий множитель реакций. */
   impulseEnergy: number;
   memory: Memory;
+  budget: BudgetState;
 }
 
 /**
@@ -287,6 +309,13 @@ export interface SceneConfig {
   ghosts: boolean;
   /** Блики на пиковых ударах. */
   flare: boolean;
+  /**
+   * Потолок суммарной активности эффектов. 0 — не ограничивать.
+   * Смысл см. в BudgetState.
+   */
+  budget: number;
+  /** Общий множитель амплитуды движения: камера, тряска, деформации. */
+  motion: number;
 }
 
 export function defaultSceneConfig(): SceneConfig {
@@ -308,6 +337,8 @@ export function defaultSceneConfig(): SceneConfig {
     smear: 0.6,
     ghosts: true,
     flare: true,
+    budget: 2.4,
+    motion: 1,
   };
 }
 
@@ -443,6 +474,8 @@ export class Scene {
     const camera = this.updateCamera(mood, dt, substance);
     const deformation = this.updateDeformation(mood, dt, substance);
     const impact = this.updateImpact(dt);
+    const memory = this.updateMemory(mood, dt, substance, camera);
+    const budget = this.applyBudget(mood, normalizedImpulse, deformation, impact, memory, camera);
 
     return {
       substance,
@@ -452,7 +485,8 @@ export class Scene {
       impact,
       impulses: this.impulses,
       impulseEnergy: normalizedImpulse,
-      memory: this.updateMemory(mood, dt, substance, camera),
+      memory,
+      budget,
     };
   }
 
@@ -627,6 +661,89 @@ export class Scene {
       if (config.pressureWave) this.pressure = Math.max(this.pressure, power);
       if (config.chromaticBurst) this.chromaticBurst = Math.max(this.chromaticBurst, power * 0.9);
     }
+  }
+
+  /**
+   * Бюджет интенсивности.
+   *
+   * Каждая группа заявляет свою нагрузку и свою уместность. Если сумма
+   * нагрузок влезает в лимит — ничего не трогаем. Если нет, каждая группа
+   * получает долю лимита пропорционально уместности, но не больше, чем
+   * просила: сильные в моменте эффекты ужимаются меньше слабых.
+   *
+   * Значения правятся на месте: SceneState раздаётся дальше уже ужатым.
+   */
+  private applyBudget(
+    mood: MoodVector,
+    impulseEnergy: number,
+    deformation: Deformation,
+    impact: ImpactState,
+    memory: Memory,
+    camera: Camera,
+  ): BudgetState {
+    const limit = this.config.budget;
+    const groups = {
+      deformation: {
+        load: (deformation.domainWarp + deformation.twist + deformation.wave
+          + deformation.turbulence + deformation.melt + deformation.fold) / 2.2,
+        relevance: 0.3 + mood.noisiness * 0.7,
+      },
+      impact: {
+        load: Math.abs(impact.lensPulse) + impact.chromaticBurst + impact.slice
+          + (impact.shockwaves.length + impact.ripples.length) * 0.25,
+        relevance: 0.35 + impulseEnergy * 1.1,
+      },
+      memory: {
+        load: memory.feedbackAmount + memory.smear,
+        relevance: 0.25 + (mood.section === 'drop' ? 0.5 : 0) + mood.energy * 0.3,
+      },
+      motion: {
+        load: (Math.abs(camera.x) + Math.abs(camera.y)) * 6
+          + Math.abs(camera.roll) * 5 + Math.abs(camera.zoom - 1) * 2.5,
+        relevance: 0.3 + mood.energy * 0.5,
+      },
+    };
+
+    const load = groups.deformation.load + groups.impact.load + groups.memory.load + groups.motion.load;
+    const scale = { deformation: 1, impact: 1, memory: 1, motion: 1 };
+
+    if (limit > 0 && load > limit) {
+      const totalRelevance = groups.deformation.relevance + groups.impact.relevance
+        + groups.memory.relevance + groups.motion.relevance;
+      for (const key of ['deformation', 'impact', 'memory', 'motion'] as const) {
+        const group = groups[key];
+        if (group.load <= 1e-6) continue;
+        const allowed = (limit * group.relevance) / totalRelevance;
+        scale[key] = clamp01(allowed / group.load);
+      }
+
+      const d = scale.deformation;
+      deformation.domainWarp *= d;
+      deformation.twist *= d;
+      deformation.wave *= d;
+      deformation.turbulence *= d;
+      deformation.melt *= d;
+      deformation.fold *= d;
+
+      const i = scale.impact;
+      impact.lensPulse *= i;
+      impact.chromaticBurst *= i;
+      impact.slice *= i;
+      for (const ring of impact.shockwaves) ring.strength *= i;
+      for (const ring of impact.ripples) ring.strength *= i;
+
+      memory.feedbackAmount *= scale.memory;
+      memory.smear *= scale.memory;
+
+      const m = scale.motion;
+      camera.x *= m;
+      camera.y *= m;
+      camera.roll *= m;
+      camera.zoom = 1 + (camera.zoom - 1) * m;
+      camera.squash = 1 + (camera.squash - 1) * m;
+    }
+
+    return { load, limit, scale };
   }
 
   /**
@@ -889,15 +1006,21 @@ export class Scene {
     const dollyTarget = clamp(-1, 1, (substance.axis - 0.45) * 1.6 + mood.energy * 0.5 - 0.2);
     this.dolly = lerp(this.dolly, dollyTarget, 1 - Math.exp(-dt / 2.2));
 
+    // Мастер амплитуды применяется один раз — ко всему выходу камеры сразу,
+    // включая дрейф и орбиту. Именно они дают основную часть движения, и
+    // «спокойная камера» должна гасить в первую очередь их, а не только толчки.
+    const motion = this.config.motion;
+    const zoomRaw = clamp(0.85, 1.6,
+      (this.zoomDrift + substance.deformation * 0.02 + this.punchOffset) / Math.sqrt(this.fov));
+
     return {
-      x: driftX + orbitX + this.cameraKickX + shakeX,
-      y: driftY + orbitY + this.cameraKickY + shakeY,
+      x: (driftX + orbitX + this.cameraKickX + shakeX) * motion,
+      y: (driftY + orbitY + this.cameraKickY + shakeY) * motion,
       // Узкое поле зрения читается как поджатый кадр — компенсируем масштабом.
-      zoom: clamp(0.85, 1.6,
-        (this.zoomDrift + substance.deformation * 0.02 + this.punchOffset) / Math.sqrt(this.fov)),
-      roll: rollBase + this.cameraKickRoll,
+      zoom: 1 + (zoomRaw - 1) * motion,
+      roll: (rollBase + this.cameraKickRoll) * motion,
       // Удар сверху сплющивает сцену по вертикали и чуть растягивает по горизонтали.
-      squash: 1 - this.compression * 0.1,
+      squash: 1 - this.compression * 0.1 * motion,
       focusX: this.focusX,
       focusY: this.focusY,
       fov: this.fov,
