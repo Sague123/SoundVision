@@ -83,13 +83,20 @@ export class BaseLayer {
       });
     }
 
-    // Вспышка света — общая для всей сцены реакция на удар, здесь она видна
-    // как мгновенная подсветка вещества снизу.
+    // Вспышка раньше заливала аддитивным прямоугольником весь кадр — это
+    // поднимало яркость каждого пикселя разом и делало картинку мутной.
+    // Теперь она локальная: свечение вокруг самого источника света, а общий
+    // отклик на удар несёт дыхание экспозиции в проходе света.
     if (scene.light.flash > 0.01) {
+      const x = scene.light.x * this.width;
+      const y = scene.light.y * this.height;
+      const radius = Math.min(this.width, this.height) * (0.25 + scene.light.flash * 0.35);
+      const glow = ctx.createRadialGradient(x, y, 0, x, y, radius);
+      glow.addColorStop(0, palette.accentAlpha(scene.light.warmth, Math.min(0.3, scene.light.flash * 0.3)));
+      glow.addColorStop(1, palette.accentAlpha(scene.light.warmth, 0));
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = Math.min(0.35, scene.light.flash * 0.3);
-      ctx.fillStyle = palette.accent(scene.light.warmth);
+      ctx.fillStyle = glow;
       ctx.fillRect(0, 0, this.width, this.height);
       ctx.restore();
     }

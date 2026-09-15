@@ -258,16 +258,18 @@ export function defaultSettings(): Settings {
       density: 0.6,
     },
     light: {
-      bloom: 0.55,
-      rays: 0.35,
-      rim: 0.3,
+      bloom: 0.42,
+      // Лучи и контровой свет заметно тише прежнего: оба размазывают свет по
+      // большой площади, а кадр должен оставаться в основном тёмным.
+      rays: 0.12,
+      rim: 0.18,
       flare: true,
       exposure: true,
       vignette: true,
     },
     memory: {
-      feedback: 0.5,
-      smear: 0.6,
+      feedback: 0.28,
+      smear: 0.45,
       ghosts: true,
     },
     sources: {

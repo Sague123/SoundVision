@@ -1,3 +1,4 @@
+import { ContourBuilder, strokeContour } from '../contour.ts';
 import { mulberry32, type GeneratorSeed, type Rng } from '../seed.ts';
 import type { DrawPrimitive, RenderFrame } from './types.ts';
 
@@ -18,6 +19,10 @@ const RULE_SETS: Array<{ birth: number[]; survive: number[] }> = [
 /**
  * Клеточный автомат с «тепловым» следом: живые клетки нагревают буфер,
  * он остывает экспоненциально, поэтому переходы плавные, а не мигающие.
+ *
+ * Рисуется не заливкой сетки, а контуром теплового поля плюс точками на
+ * живых клетках: раньше сетка 128 клеток растягивалась на весь кадр и давала
+ * крупные блоки, теперь линии и точки идут в физическом разрешении экрана.
  */
 export class CellularPrimitive implements DrawPrimitive {
   readonly id = 'cellular' as const;
@@ -28,9 +33,7 @@ export class CellularPrimitive implements DrawPrimitive {
   private cells = new Uint8Array(1);
   private next = new Uint8Array(1);
   private heat = new Float32Array(1);
-  private canvas: HTMLCanvasElement | null = null;
-  private buffer: CanvasRenderingContext2D | null = null;
-  private image: ImageData | null = null;
+  private readonly contour = new ContourBuilder(6000);
   private width = 1;
   private height = 1;
   private rule = RULE_SETS[0];
@@ -48,13 +51,6 @@ export class CellularPrimitive implements DrawPrimitive {
     this.cells = new Uint8Array(size);
     this.next = new Uint8Array(size);
     this.heat = new Float32Array(size);
-
-    const canvas = this.canvas ?? document.createElement('canvas');
-    canvas.width = this.cols;
-    canvas.height = this.rows;
-    this.canvas = canvas;
-    this.buffer = canvas.getContext('2d');
-    this.image = this.buffer?.createImageData(this.cols, this.rows) ?? null;
     this.randomize(0.28);
   }
 
@@ -65,19 +61,11 @@ export class CellularPrimitive implements DrawPrimitive {
     this.nextStepMs = 0;
   }
 
-  dispose(): void {
-    this.canvas = null;
-    this.buffer = null;
-    this.image = null;
-  }
+  dispose(): void {}
 
   draw(frame: RenderFrame): void {
-    const canvas = this.canvas;
-    const buffer = this.buffer;
-    const image = this.image;
-    if (!canvas || !buffer || !image) return;
+    const { ctx, mood, params, palette, weight } = frame;
 
-    const { mood, params } = frame;
     // Шаг автомата привязан к темпу: сетка «идёт» вместе с треком.
     const beatMs = 60000 / Math.max(40, mood.bpm);
     const divisions = 1 + Math.round(params.speed * 3);
@@ -91,16 +79,37 @@ export class CellularPrimitive implements DrawPrimitive {
     if (mood.onset) this.inject(0.02 + mood.onsetStrength * 0.08);
 
     const cool = Math.exp(-(frame.dtMs / 1000) * (1.6 + (1 - params.trail) * 5));
-    this.paint(image, frame, cool);
-    buffer.putImageData(image, 0, 0);
+    for (let i = 0; i < this.heat.length; i++) this.heat[i] *= cool;
 
-    const ctx = frame.ctx;
+    const scaleX = this.width / (this.cols - 1);
+    const scaleY = this.height / (this.rows - 1);
+
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = (0.22 + mood.energy * 0.3) * frame.weight;
-    // Мягкий upscale на низком sharpness даёт «органику», жёсткий — пиксель-арт.
-    ctx.imageSmoothingEnabled = params.sharpness < 0.6;
-    ctx.drawImage(canvas, 0, 0, this.width, this.height);
+    ctx.lineCap = 'round';
+
+    // Контур тёплой области: границы живых скоплений, а не сами клетки.
+    this.contour.build(this.heat, this.cols, this.rows, 0.34 + params.sharpness * 0.3);
+    if (this.contour.length > 0) {
+      ctx.lineWidth = Math.max(1, 0.8 + params.sharpness * 0.7);
+      ctx.strokeStyle = palette.accentAlpha(0.45, (0.22 + mood.energy * 0.28) * weight);
+      strokeContour(ctx, this.contour, scaleX, scaleY);
+    }
+
+    // Точки на живых клетках — та самая мелкая деталь, которая читается
+    // только в нативном разрешении.
+    const dotSize = Math.max(1, Math.min(scaleX, scaleY) * 0.14);
+    ctx.fillStyle = palette.accentAlpha(0.9, (0.18 + mood.energy * 0.25) * weight);
+    ctx.beginPath();
+    for (let y = 0; y < this.rows; y++) {
+      const rowOffset = y * this.cols;
+      for (let x = 0; x < this.cols; x++) {
+        if (this.cells[rowOffset + x] === 0) continue;
+        ctx.moveTo(x * scaleX + dotSize, y * scaleY);
+        ctx.arc(x * scaleX, y * scaleY, dotSize, 0, Math.PI * 2);
+      }
+    }
+    ctx.fill();
     ctx.restore();
   }
 
@@ -144,26 +153,5 @@ export class CellularPrimitive implements DrawPrimitive {
     }
   }
 
-  private paint(image: ImageData, frame: RenderFrame, cool: number): void {
-    const data = image.data;
-    const { palette, mood } = frame;
-    // Палитра берётся полосами по высоте — получается градиент по сетке.
-    const stops: Array<[number, number, number]> = [];
-    for (let i = 0; i < 8; i++) stops.push(palette.accentRgb(i / 7));
-
-    for (let y = 0; y < this.rows; y++) {
-      const band = stops[Math.min(7, Math.floor((y / this.rows) * 8))];
-      for (let x = 0; x < this.cols; x++) {
-        const index = y * this.cols + x;
-        const heat = this.heat[index] = this.heat[index] * cool;
-        const intensity = Math.min(1, heat * (0.35 + mood.energy * 0.45));
-        const offset = index * 4;
-        data[offset] = band[0] * intensity;
-        data[offset + 1] = band[1] * intensity;
-        data[offset + 2] = band[2] * intensity;
-        data[offset + 3] = 255;
-      }
-    }
-  }
 }
 

@@ -261,7 +261,9 @@ export class Generator {
       this.baseId = best;
     }
 
-    const target = settings.layers.base.enabled ? 0.35 + mood.energy * 0.4 : 0;
+    // Базовый слой — атмосфера, а не участник: по иерархии ролей ему положено
+    // 5-10% визуального веса, не больше.
+    const target = settings.layers.base.enabled ? 0.08 + mood.energy * 0.12 : 0;
     this.baseWeight = lerp(this.baseWeight, target, k);
   }
 

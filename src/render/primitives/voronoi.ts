@@ -1,10 +1,11 @@
+import { ContourBuilder, strokeContour } from '../contour.ts';
 import { SimplexNoise } from '../noise.ts';
 import { mulberry32, type GeneratorSeed } from '../seed.ts';
 import type { DrawPrimitive, RenderFrame } from './types.ts';
 
 const MAX_SITES = 42;
-/** Длинная сторона поля расстояний. Дальше картинка растягивается с интерполяцией. */
-const FIELD_LONG_SIDE = 168;
+/** Разрешение поля расстояний. Из него берётся только геометрия рёбер. */
+const FIELD_LONG_SIDE = 190;
 /** Поле пересчитывается на 30 Гц: ячейки двигаются медленно, разницы не видно. */
 const FIELD_INTERVAL_MS = 33;
 
@@ -16,8 +17,12 @@ interface Site {
 }
 
 /**
- * Ячейки Вороного. Считаем поле ближайших сайтов в низком разрешении и
- * растягиваем — на CPU это единственный способ уложиться в 60 fps.
+ * Ячейки Вороного рёбрами, а не заливкой.
+ *
+ * Поле хранит отношение расстояний до первого и второго ближайших сайтов:
+ * на самом ребре оно равно единице и падает к центрам ячеек. Изолиния этого
+ * поля и есть сетка рёбер — тонкая, гладкая и в физическом разрешении экрана,
+ * тогда как раньше поле растягивалось на весь кадр и давало блочную заливку.
  */
 export class VoronoiPrimitive implements DrawPrimitive {
   readonly id = 'voronoi' as const;
@@ -25,9 +30,10 @@ export class VoronoiPrimitive implements DrawPrimitive {
 
   private noise = new SimplexNoise();
   private sites: Site[] = [];
-  private canvas: HTMLCanvasElement | null = null;
-  private buffer: CanvasRenderingContext2D | null = null;
-  private image: ImageData | null = null;
+  private field = new Float32Array(1);
+  private readonly contour = new ContourBuilder(9000);
+  private cols = 1;
+  private rows = 1;
   private width = 1;
   private height = 1;
   private phase = 0;
@@ -40,15 +46,9 @@ export class VoronoiPrimitive implements DrawPrimitive {
     this.width = width;
     this.height = height;
     const aspect = width / Math.max(1, height);
-    const fw = Math.max(16, Math.round(aspect >= 1 ? FIELD_LONG_SIDE : FIELD_LONG_SIDE * aspect));
-    const fh = Math.max(16, Math.round(aspect >= 1 ? FIELD_LONG_SIDE / aspect : FIELD_LONG_SIDE));
-
-    const canvas = this.canvas ?? document.createElement('canvas');
-    canvas.width = fw;
-    canvas.height = fh;
-    this.canvas = canvas;
-    this.buffer = canvas.getContext('2d', { willReadFrequently: false });
-    this.image = this.buffer?.createImageData(fw, fh) ?? null;
+    this.cols = Math.max(16, Math.round(aspect >= 1 ? FIELD_LONG_SIDE : FIELD_LONG_SIDE * aspect));
+    this.rows = Math.max(16, Math.round(aspect >= 1 ? FIELD_LONG_SIDE / aspect : FIELD_LONG_SIDE));
+    this.field = new Float32Array(this.cols * this.rows);
     this.lastFieldMs = 0;
   }
 
@@ -65,62 +65,52 @@ export class VoronoiPrimitive implements DrawPrimitive {
     this.lastFieldMs = 0;
   }
 
-  dispose(): void {
-    this.canvas = null;
-    this.buffer = null;
-    this.image = null;
-  }
+  dispose(): void {}
 
   draw(frame: RenderFrame): void {
-    const canvas = this.canvas;
-    const buffer = this.buffer;
-    const image = this.image;
-    if (!canvas || !buffer || !image) return;
+    const { ctx, params, mood, palette, weight } = frame;
 
     if (frame.timeMs - this.lastFieldMs >= FIELD_INTERVAL_MS) {
       this.lastFieldMs = frame.timeMs;
-      this.renderField(frame, image, canvas.width, canvas.height);
-      buffer.putImageData(image, 0, 0);
+      this.buildField(frame);
     }
 
-    const ctx = frame.ctx;
+    // Чем выше sharpness, тем ближе изолиния к самому ребру, то есть тем тоньше
+    // и резче сетка. Низкий sharpness даёт широкие мягкие «коридоры».
+    // Порог ближе к единице — уже линия ребра.
+    const level = 0.84 + params.sharpness * 0.11;
+    this.contour.build(this.field, this.cols, this.rows, level);
+    if (this.contour.length === 0) return;
+
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = (0.24 + frame.mood.energy * 0.3) * frame.weight;
-    ctx.imageSmoothingEnabled = true;
-    // 'medium' достаточно: поле и так растягивается в 7-8 раз из мягкой картинки,
-    // а 'high' на слабой встроенной графике заметно дороже.
-    ctx.imageSmoothingQuality = 'medium';
-    ctx.drawImage(canvas, 0, 0, this.width, this.height);
+    ctx.lineCap = 'round';
+    ctx.lineWidth = Math.max(1, 0.8 + params.sharpness * 0.8);
+    ctx.strokeStyle = palette.accentAlpha(0.55, (0.35 + mood.energy * 0.45) * weight);
+    strokeContour(ctx, this.contour, this.width / (this.cols - 1), this.height / (this.rows - 1));
     ctx.restore();
   }
 
-  private renderField(frame: RenderFrame, image: ImageData, fw: number, fh: number): void {
-    const { params, mood, palette } = frame;
-    const count = Math.max(4, Math.round(MAX_SITES * (0.14 + params.density * 0.86)));
+  private buildField(frame: RenderFrame): void {
+    const { params } = frame;
+    const { cols, rows, field } = this;
+    // Меньше сайтов — крупнее ячейки и меньше рёбер: сетка из сорока ячеек
+    // на дропе закрывала кадр целиком.
+    const count = Math.max(4, Math.round(MAX_SITES * (0.1 + params.density * 0.42)));
     const t = (frame.timeMs / 1000) * (0.05 + params.speed * 0.28) + this.phase;
     const drift = 0.4 + params.chaos * 1.4;
 
     for (let i = 0; i < count; i++) {
       const site = this.sites[i];
-      this.siteX[i] = (0.5 + this.noise.noise2D(site.seedX, t * drift) * 0.55) * fw;
-      this.siteY[i] = (0.5 + this.noise.noise2D(site.seedY, t * drift + 17.3) * 0.55) * fh;
+      this.siteX[i] = (0.5 + this.noise.noise2D(site.seedX, t * drift) * 0.55) * cols;
+      this.siteY[i] = (0.5 + this.noise.noise2D(site.seedY, t * drift + 17.3) * 0.55) * rows;
     }
 
-    // Цвета ячеек считаем один раз на пересчёт поля, а не на каждый пиксель.
-    const colors: Array<[number, number, number]> = [];
-    for (let i = 0; i < count; i++) colors.push(palette.accentRgb(this.sites[i].tone));
-
-    // Чем выше sharpness, тем уже светящаяся граница между ячейками.
-    const edgeWidth = 0.28 - params.sharpness * 0.22;
-    const edgeGlow = 0.5 + mood.flux * 0.5;
-    const data = image.data;
-
-    for (let y = 0; y < fh; y++) {
-      for (let x = 0; x < fw; x++) {
+    for (let y = 0; y < rows; y++) {
+      const rowOffset = y * cols;
+      for (let x = 0; x < cols; x++) {
         let best = Infinity;
         let second = Infinity;
-        let bestIndex = 0;
         for (let i = 0; i < count; i++) {
           const dx = x - this.siteX[i];
           const dy = y - this.siteY[i];
@@ -128,25 +118,13 @@ export class VoronoiPrimitive implements DrawPrimitive {
           if (d < best) {
             second = best;
             best = d;
-            bestIndex = i;
           } else if (d < second) {
             second = d;
           }
         }
-
-        // Близость к границе: отношение расстояний до первого и второго сайта.
-        const ratio = second > 0 ? Math.sqrt(best / second) : 0;
-        const edge = ratio > 1 - edgeWidth ? (ratio - (1 - edgeWidth)) / (edgeWidth || 1e-6) : 0;
-        const fill = 0.16 + edge * edge * edgeGlow;
-
-        const [r, g, b] = colors[bestIndex];
-        const offset = (y * fw + x) * 4;
-        data[offset] = r * fill;
-        data[offset + 1] = g * fill;
-        data[offset + 2] = b * fill;
-        data[offset + 3] = 255;
+        // Отношение расстояний: единица ровно на ребре, ноль в центре ячейки.
+        field[rowOffset + x] = second > 0 ? Math.sqrt(best / second) : 0;
       }
     }
   }
 }
-

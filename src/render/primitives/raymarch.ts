@@ -74,21 +74,27 @@ float map(vec3 p) {
   p.xy *= rot(uTime * 0.07 * (0.3 + uSpeed));
 
   float breathe = 1.0 + uEnergy * 0.22 + sin(uBeatPhase * 6.2831) * uEnergy * 0.1;
-  float radius = mix(0.75, 1.35, uScale) * breathe;
+  float radius = mix(0.34, 0.6, uScale) * breathe;
 
   float sphere = sdSphere(p, radius);
   float torus = sdTorus(p, vec2(radius * 1.05, mix(0.5, 0.12, uSharpness) * radius));
   float box = sdBox(p, vec3(radius * 0.78));
 
   // Форма непрерывно перетекает между шаром, тором и кубом — никаких переключений.
-  float shape = smin(sphere, torus, mix(0.9, 0.12, uSharpness));
-  shape = mix(shape, smin(shape, box, 0.5), uBrightness);
+  // Радиусы сглаживания тоже считаются от размера тела: smin занижает значение
+  // поля примерно на четверть своего k, и в абсолютных единицах это раздувало
+  // форму сильнее, чем она сама.
+  float shape = smin(sphere, torus, radius * mix(0.7, 0.1, uSharpness));
+  shape = mix(shape, smin(shape, box, radius * 0.4), uBrightness);
 
   // Складки поверхности: их частота — от density, глубина — от chaos и шумности.
   float ripple = sin(p.x * (3.0 + uDensity * 9.0) + uTime * 1.4)
                * sin(p.y * (3.0 + uDensity * 9.0) - uTime * 1.1)
                * sin(p.z * (3.0 + uDensity * 9.0) + uTime * 0.9);
-  shape -= ripple * (0.02 + uChaos * 0.16 + uNoisiness * 0.06);
+  // Глубина складок считается от радиуса, а не в абсолютных единицах. С
+  // абсолютной глубиной складки раздували эффективный радиус тела почти вдвое:
+  // луч «цеплялся» за складку далеко от самой формы, и она занимала весь кадр.
+  shape -= ripple * radius * (0.02 + uChaos * 0.1 + uNoisiness * 0.04);
 
   // Волна от удара идёт сферическим фронтом и коробит поверхность на своём пути.
   if (uImpulse.z > 0.001) {
@@ -97,11 +103,12 @@ float map(vec3 p) {
     shape -= exp(-front * front * 5.0) * uImpulse.z * 0.3;
   }
 
-  // Спутники вокруг основной формы — плотность отвечает за их количество.
+  // Спутник вокруг основной формы. Раньше здесь была бесконечная решётка
+  // через mod — она заполняла весь кадр телами, и при контурной отрисовке
+  // экран превращался в сплошную сетку.
   vec3 q = p;
   q.xz *= rot(uTime * 0.4);
-  float orbit = sdSphere(vec3(mod(q.x + 2.0, 4.0) - 2.0, q.y, q.z) - vec3(0.0, 0.0, 2.4 + uWarp),
-                         0.12 + uDensity * 0.22);
+  float orbit = sdSphere(q - vec3(1.2 + uWarp * 0.4, 0.0, 0.0), 0.07 + uDensity * 0.12);
   return smin(shape, orbit, 0.6);
 }
 
@@ -120,23 +127,31 @@ void main() {
   // Лёгкий варп экранных координат — «линза», которая дышит вместе с flux.
   uv += 0.06 * uWarp * vec2(sin(uv.y * 6.0 + uTime), cos(uv.x * 6.0 - uTime)) * (0.4 + uFlux);
 
-  vec3 origin = vec3(0.0, 0.0, -4.2);
-  vec3 dir = normalize(vec3(uv, 1.4));
+  vec3 origin = vec3(0.0, 0.0, -5.0);
+  // Поле зрения уже прежнего: форма должна быть доминирующим объектом на
+  // чёрном, а не занимать кадр целиком — иначе теряется и фокус, и темнота.
+  vec3 dir = normalize(vec3(uv, 3.4));
 
   float travelled = 0.0;
-  float glow = 0.0;
+  // Насколько близко луч подошёл к поверхности — из этого делается свечение.
+  // Накопление вдоль луча не годится: оно набегает даже у лучей, прошедших
+  // мимо, и заливает весь кадр ровной серой подложкой.
+  float nearest = 1e9;
   bool hit = false;
   for (int i = 0; i < MAX_STEPS; i++) {
     vec3 p = origin + dir * travelled;
     float d = map(p);
-    // Мягкое свечение копится у поверхности — объём без второго прохода.
-    // Вклад одного шага ограничен: у самой поверхности 1/d уходит в бесконечность.
-    glow += min(0.05, 0.012 / (0.02 + abs(d)));
+    nearest = min(nearest, abs(d));
     if (d < SURFACE_DIST) { hit = true; break; }
     travelled += d;
     if (travelled > MAX_DIST) break;
   }
+  // Экспонента по минимальному сближению: строго ноль вдали от формы.
+  float glow = exp(-nearest * 6.0);
 
+  // Форма рисуется контурами, а не залитой поверхностью: сплошная заливка
+  // занимает весь кадр средними тонами и читается мутно. Здесь светятся
+  // только силуэт и срезы формы по глубине — как горизонтали на карте.
   vec3 color = vec3(0.0);
   if (hit) {
     vec3 p = origin + dir * travelled;
@@ -144,17 +159,32 @@ void main() {
     // Источник обходит сцену по орбите — тот же угол, что у фона базового слоя.
     vec3 light = normalize(vec3(cos(uLightAngle) * 0.9, sin(uLightAngle) * 0.9, -0.6));
     float diffuse = max(0.0, dot(normal, light));
-    float fresnel = pow(1.0 - max(0.0, dot(normal, -dir)), 2.5);
     float depth = clamp(travelled / 8.0, 0.0, 1.0);
 
-    color = mix(uColorA, uColorB, diffuse);
-    color = mix(color, uColorC, fresnel);
-    color *= 0.35 + diffuse * (0.6 + uEnergy * 0.8);
-    color *= 1.0 - depth * 0.55;
+    // Силуэт: чем касательнее луч к поверхности, тем ярче край.
+    float rim = pow(1.0 - max(0.0, dot(normal, -dir)), 3.0);
+
+    // Срезы по глубине. Их частота растёт с плотностью, а медленный дрейф
+    // фазы заставляет линии течь по форме.
+    float spacing = 2.5 + uDensity * 7.0;
+    float slice = abs(fract(travelled * spacing + uTime * 0.12) - 0.5) * 2.0;
+    float sliceLine = smoothstep(0.88, 1.0, slice);
+
+    // Линии по нормали добавляют структуру там, где форма поворачивается.
+    float facet = smoothstep(0.9, 1.0, abs(fract(diffuse * (3.0 + uSharpness * 6.0)) - 0.5) * 2.0);
+
+    color = uColorA * sliceLine * (0.5 + diffuse * 0.6)
+          + uColorB * facet * 0.35
+          + uColorC * rim * 1.3;
+    color *= 1.0 - depth * 0.45;
   }
 
-  color += uColorC * min(glow, 1.5) * (0.04 + uEnergy * 0.08);
-  color += uColorA * uLightFlash * 0.25;
+  // Свечение оставлено совсем слабым: на контурной картинке оно только
+  // подсвечивает линии, а не наполняет пустоту.
+  color += uColorC * min(glow, 1.0) * (0.015 + uEnergy * 0.03);
+  // Вспышка умножается на близость к форме: раньше она прибавлялась ко всем
+  // пикселям кадра и держала ровную серую подложку поверх чёрного фона.
+  color += uColorA * uLightFlash * glow * 0.4;
 
   // Тон-маппинг Рейнхарда: слой кладётся в композицию через 'lighter',
   // поэтому значения выше единицы выбивают кадр в белое — ограничиваем здесь.

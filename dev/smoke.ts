@@ -8,6 +8,8 @@
  * Открывается на `npm run dev` по адресу /dev/smoke.html.
  * `?only=voronoi&section=drop` — держать одну пару бесконечно, чтобы
  * разглядеть конкретный примитив.
+ * `?plain=1` — снять весь пост-конвейер и память: видно, что рисует сам
+ * примитив, без свечения, лучей и обратной связи.
  * В прод-сборку не попадает: Vite собирает только index.html.
  */
 
@@ -54,7 +56,22 @@ compositor.resize(window.innerWidth, window.innerHeight, 1);
 const settings = defaultSettings();
 settings.generator.mode = 'manual';
 
+
 const params = new URLSearchParams(window.location.search);
+// Режим «как есть»: только геометрия примитива, без пост-обработки.
+// Нужен, чтобы понимать, кто именно засветил кадр — примитив или конвейер.
+if (params.get('plain') === '1') {
+  settings.light.bloom = 0;
+  settings.light.rays = 0;
+  settings.light.rim = 0;
+  settings.light.flare = false;
+  settings.memory.feedback = 0;
+  settings.memory.smear = 0;
+  settings.deformation.enabled = false;
+  settings.layers.transient.enabled = false;
+  settings.layers.base.enabled = false;
+}
+
 const only = params.get('only') as PrimitiveId | null;
 const onlySection = (params.get('section') as Section | null) ?? 'steady';
 /** В режиме `?only=` стадия одна и живёт бесконечно — это ручной осмотр. */
@@ -108,7 +125,17 @@ function synthesize(timeMs: number, section: Section): MoodVector {
   };
 }
 
-function frame(timestamp: number): void {
+/**
+ * Виртуальные часы вместо реального времени.
+ *
+ * Под софтверным рендером кадры идут неровно, и на реальных часах настроение
+ * в момент замера каждый раз разное — метрики скачут и сравнивать прогоны
+ * нельзя. С фиксированным шагом прогон полностью воспроизводим.
+ */
+const VIRTUAL_STEP_MS = 1000 / 60;
+
+function frame(): void {
+  const timestamp = report.frames * VIRTUAL_STEP_MS;
   const stage = stages[stageIndex];
   if (!stage) {
     report.done = true;

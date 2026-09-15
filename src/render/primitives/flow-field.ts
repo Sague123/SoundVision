@@ -44,7 +44,13 @@ export class FlowFieldPrimitive implements DrawPrimitive {
 
   draw(frame: RenderFrame): void {
     const { ctx, params, mood, palette, weight } = frame;
-    const count = Math.floor(MAX_PARTICLES * (0.18 + params.density * 0.82) * (0.35 + weight * 0.65));
+    // Плотность заметно ниже прежней: кадр должен оставаться в основном
+    // тёмным, а яркость набираться там, где линии сходятся.
+    // Плотность растёт корнем, а не линейно: на пике линии должны сгущаться
+    // в гребни, а не покрывать кадр целиком.
+    const count = Math.floor(
+      MAX_PARTICLES * (0.05 + Math.sqrt(params.density) * 0.28) * (0.35 + weight * 0.65),
+    );
     if (count <= 0) return;
 
     const dt = Math.min(0.05, frame.dtMs / 1000);
@@ -61,7 +67,8 @@ export class FlowFieldPrimitive implements DrawPrimitive {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
-    ctx.lineWidth = 0.6 + mood.energy * 2.2 + params.sharpness * 0.8;
+    // Одна-две физические точки: толстые линии заливают кадр площадью.
+    ctx.lineWidth = Math.max(1, 1 + params.sharpness * 0.8);
 
     const bandSize = Math.ceil(count / COLOR_BANDS);
     for (let band = 0; band < COLOR_BANDS; band++) {
@@ -90,7 +97,7 @@ export class FlowFieldPrimitive implements DrawPrimitive {
       }
       // Оттенок ведём и по полосе, и по фазе доли — на битах палитра «дышит».
       const tone = (band / COLOR_BANDS + mood.beatPhase * 0.12) % 1;
-      ctx.strokeStyle = palette.accentAlpha(tone, (0.14 + mood.energy * 0.5) * weight);
+      ctx.strokeStyle = palette.accentAlpha(tone, (0.08 + mood.energy * 0.28) * weight);
       ctx.stroke();
     }
     ctx.restore();

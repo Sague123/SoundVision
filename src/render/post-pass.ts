@@ -65,11 +65,16 @@ float hash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
 
-/** Value-шум: для гнутья координат его хватает, а стоит он втрое дешевле симплекса. */
+/**
+ * Value-шум. Интерполяция квинтическая, а не кубическая: у кубической
+ * ненулевая вторая производная на границах ячеек, и при использовании шума
+ * для смещения координат сетка ячеек проступает блоками — та самая
+ * «шахматка» в тумане.
+ */
 float valueNoise(vec2 p) {
   vec2 i = floor(p);
   vec2 f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
+  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
   return mix(
     mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
     mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
@@ -77,8 +82,15 @@ float valueNoise(vec2 p) {
   ) * 2.0 - 1.0;
 }
 
+/** Октавы ещё и поворачиваются: без поворота их сетки совпадают и усиливают друг друга. */
 float fbm(vec2 p) {
-  return valueNoise(p) * 0.65 + valueNoise(p * 2.17 + 19.3) * 0.35;
+  const mat2 turn = mat2(0.8, 0.6, -0.6, 0.8);
+  float sum = valueNoise(p) * 0.55;
+  p = turn * p * 2.13 + 19.3;
+  sum += valueNoise(p) * 0.3;
+  p = turn * p * 2.07 + 7.1;
+  sum += valueNoise(p) * 0.15;
+  return sum;
 }
 
 vec2 rotate(vec2 p, float a) {
@@ -206,7 +218,9 @@ void main() {
     // это и читается как полёт внутрь туннеля.
     f /= max(0.5, uFeedbackZoom);
     f += 0.5 + uFeedbackOffset;
-    vec3 previous = texture(uFeedback, clamp(f, 0.0, 1.0)).rgb * 0.92;
+    // Затухание заметно быстрее прежнего: при 0.92 засвеченный пиксель падал
+    // ниже порога видимости полсотни кадров и держал весь кадр светлым.
+    vec3 previous = texture(uFeedback, clamp(f, 0.0, 1.0)).rgb * 0.84;
 
     // Предохранитель от самовозбуждения: берём максимум, а не сумму.
     // Максимум затухающей последовательности не может превысить самый яркий
@@ -386,14 +400,18 @@ export interface QualityPreset {
   raySamples: number;
   /** Разрешено ли считать контровой свет. */
   rim: boolean;
-  /** Доля разрешения для raymarch-примитива. */
+  /**
+   * Доля разрешения для raymarch-примитива. Единица — натив: raymarch бывает
+   * главным изображением кадра, и мылить его нельзя. Понижается только на
+   * низком уровне, когда выбора уже нет.
+   */
   raymarch: number;
 }
 
 export const QUALITY_PRESETS: Record<QualityLevel, QualityPreset> = {
-  low: { bloomScale: 0.18, blurPasses: 1, raySamples: 6, rim: false, raymarch: 0.3 },
-  medium: { bloomScale: 0.25, blurPasses: 1, raySamples: 12, rim: true, raymarch: 0.5 },
-  high: { bloomScale: 0.34, blurPasses: 2, raySamples: 20, rim: true, raymarch: 0.75 },
+  low: { bloomScale: 0.2, blurPasses: 1, raySamples: 6, rim: false, raymarch: 0.6 },
+  medium: { bloomScale: 0.3, blurPasses: 1, raySamples: 12, rim: true, raymarch: 1 },
+  high: { bloomScale: 0.4, blurPasses: 2, raySamples: 20, rim: true, raymarch: 1 },
 };
 
 export const QUALITY_ORDER: QualityLevel[] = ['low', 'medium', 'high'];
@@ -446,6 +464,7 @@ export class PostPass {
   private bloomWidth = 1;
   private bloomHeight = 1;
   private quality: QualityPreset = QUALITY_PRESETS.medium;
+  private floatBuffers = false;
   private unavailable = false;
   /** До первого кадра в буфере обратной связи мусор — подмешивать его нельзя. */
   private feedbackReady = false;
@@ -469,6 +488,11 @@ export class PostPass {
 
   get qualityPreset(): QualityPreset {
     return this.quality;
+  }
+
+  /** Работают ли накопительные буферы в плавающей точке — для отладки. */
+  get usesFloatBuffers(): boolean {
+    return this.floatBuffers;
   }
 
   resize(width: number, height: number): void {
@@ -618,7 +642,9 @@ export class PostPass {
     // Каждый проход расширяет радиус вдвое: два прохода дают мягкий широкий
     // ореол, один — экономный узкий.
     for (let pass = 0; pass < this.quality.blurPasses; pass++) {
-      const spread = 1 + pass * 2;
+      // Второй проход расширяет ореол умеренно: при множителе 3 свечение
+      // растекалось на треть кадра и съедало темноту.
+      const spread = 1 + pass;
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomFboB);
       gl.activeTexture(gl.TEXTURE3);
       gl.bindTexture(gl.TEXTURE_2D, this.bloomTextureA);
@@ -674,6 +700,10 @@ export class PostPass {
       this.unavailable = true;
       return;
     }
+
+    // Рендер в плавающую точку требует расширения; без него остаёмся на 8 битах.
+    this.floatBuffers = gl.getExtension('EXT_color_buffer_float') !== null
+      || gl.getExtension('EXT_color_buffer_half_float') !== null;
 
     const warpProgram = linkProgram(gl, VERTEX_SHADER, WARP_FRAGMENT);
     const brightProgram = linkProgram(gl, VERTEX_SHADER, BRIGHT_FRAGMENT);
@@ -734,11 +764,11 @@ export class PostPass {
     if (!gl) return;
 
     for (let i = 0; i < 2; i++) {
-      allocate(gl, this.frameTextures[i], this.width, this.height);
+      allocate(gl, this.frameTextures[i], this.width, this.height, this.floatBuffers);
       attach(gl, this.frameFbos[i], this.frameTextures[i]);
     }
-    allocate(gl, this.bloomTextureA, this.bloomWidth, this.bloomHeight);
-    allocate(gl, this.bloomTextureB, this.bloomWidth, this.bloomHeight);
+    allocate(gl, this.bloomTextureA, this.bloomWidth, this.bloomHeight, this.floatBuffers);
+    allocate(gl, this.bloomTextureB, this.bloomWidth, this.bloomHeight, this.floatBuffers);
 
     attach(gl, this.bloomFboA, this.bloomTextureA);
     attach(gl, this.bloomFboB, this.bloomTextureB);
@@ -760,10 +790,25 @@ function createTexture(gl: WebGL2RenderingContext): WebGLTexture {
   return texture;
 }
 
-function allocate(gl: WebGL2RenderingContext, texture: WebGLTexture | null, width: number, height: number): void {
+/**
+ * Выделение буфера. Там, где копится свечение и обратная связь, восемь бит на
+ * канал мало: ошибка квантования накапливается кадр за кадром и вылезает
+ * блочной «грязью». RGBA16F её убирает; если расширения нет, откатываемся.
+ */
+function allocate(
+  gl: WebGL2RenderingContext,
+  texture: WebGLTexture | null,
+  width: number,
+  height: number,
+  float: boolean,
+): void {
   if (!texture) return;
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  if (float) {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, width, height, 0, gl.RGBA, gl.HALF_FLOAT, null);
+  } else {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  }
 }
 
 function attach(gl: WebGL2RenderingContext, fbo: WebGLFramebuffer | null, texture: WebGLTexture | null): void {

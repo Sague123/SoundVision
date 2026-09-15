@@ -117,11 +117,12 @@ export class Compositor {
   }
 
   resize(cssWidth: number, cssHeight: number, dpr = window.devicePixelRatio || 1): void {
-    // Пиксельный размер ограничиваем: на 4K-телике честный DPR убивает fps,
-    // а разница на генеративной картинке почти не видна.
-    const scale = Math.min(dpr, 1.5);
-    this.width = Math.max(1, Math.round(cssWidth * scale));
-    this.height = Math.max(1, Math.round(cssHeight * scale));
+    // Основной проход идёт в физическом разрешении экрана без всяких потолков.
+    // Ограничение DPR давало мыло на 4K: холст рисовался мельче экрана и
+    // растягивался. Экономить разрешение можно только вспомогательным
+    // проходам (свечение, размытие), но не самой картинке.
+    this.width = Math.max(1, Math.round(cssWidth * dpr));
+    this.height = Math.max(1, Math.round(cssHeight * dpr));
     this.canvas.width = this.width;
     this.canvas.height = this.height;
     this.canvas.style.width = `${cssWidth}px`;
@@ -257,10 +258,10 @@ export class Compositor {
       ctx.drawImage(this.base.canvas, 0, 0);
     }
     if (settings.layers.genre.enabled) {
-      // 'screen' вместо 'lighter': жанровый слой светится, но плавно упирается
-      // в единицу, а не выбивает кадр в белое на дропе. Транзиентам ниже
-      // сложение оставлено — им как раз положено бить.
-      ctx.globalCompositeOperation = 'screen';
+      // Сложение, а не 'screen': яркость должна набираться наложением линий —
+      // там, где их много, получается яркий гребень. От выбивания в белое
+      // защищает тон-маппинг в конце цепочки, а не режим смешивания.
+      ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = clamp01(settings.layers.genre.weight);
       ctx.drawImage(this.genre.canvas, 0, 0);
     }
@@ -355,7 +356,9 @@ export class Compositor {
     this.meanLuminance += (mean - this.meanLuminance) * 0.25;
     // Порог держится выше средней яркости: светится то, что выделяется на фоне
     // кадра, а не весь кадр целиком. Именно это и не даёт выжечь картинку.
-    const target = clamp(0.2, 0.85, mean * 1.5 + 0.18);
+    // Порог держится заметно выше средней яркости: на тёмной картинке с
+    // тонкими линиями светиться должны только сами линии, а не фон вокруг них.
+    const target = clamp(0.3, 0.92, mean * 2.2 + 0.3);
     this.bloomThreshold += (target - this.bloomThreshold) * 0.25;
   }
 

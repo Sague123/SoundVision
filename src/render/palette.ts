@@ -143,8 +143,11 @@ export class PaletteEngine {
     // а не «сделать всё ярче» — иначе на дропе кадр просто выцветает.
     const formTarget = (0.5 + mood.energy * 0.3) * tuning.lightnessBoost;
     const formLightness = clamp(0.12, 0.95, this.lightness.update(formTarget, k) + breathLight);
-    const bgTarget = 0.14 - mood.energy * 0.06 + (mood.section === 'calm' ? 0.03 : 0);
-    const backgroundLightness = clamp(0.03, 0.3, this.bgLightness.update(bgTarget, k));
+    // Фон почти чёрный и остаётся таким. Серый или коричневый фон — это уже
+    // заливка средними тонами, из-за неё кадр читается мутным независимо от
+    // того, что нарисовано поверх. Яркость набирается линиями, а не фоном.
+    const bgTarget = 0.05 - mood.energy * 0.018;
+    const backgroundLightness = clamp(0.012, 0.075, this.bgLightness.update(bgTarget, k));
 
     const spread = this.spread.update(spreadForSection(mood.section), k);
 
@@ -207,7 +210,7 @@ export class PaletteEngine {
       h: baseHue + hueOffsetAt(harmony, 0.15, spread) * 0.5,
     }));
     const bgBottom = rgbToCss(oklchToRgb({
-      l: backgroundLightness * 0.55,
+      l: backgroundLightness * 0.4,
       c: chroma * 0.3,
       h: baseHue + hueOffsetAt(harmony, 0.85, spread) * 0.5,
     }));
