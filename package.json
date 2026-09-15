@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
     "typecheck": "tsc --noEmit",
-    "bridge": "tsx bridge-server/server.ts"
+    "bridge": "tsx bridge-server/server.ts",
+    "check": "tsx dev/scene-check.ts"
   },
   "devDependencies": {
     "tsx": "^4.19.2",

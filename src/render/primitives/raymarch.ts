@@ -1,4 +1,4 @@
-import { parseHsl } from '../palette.ts';
+import type { Rgb } from '../color/oklch.ts';
 import { mulberry32, type GeneratorSeed } from '../seed.ts';
 import type { DrawPrimitive, RenderFrame } from './types.ts';
 
@@ -34,6 +34,11 @@ uniform float uSharpness;
 uniform float uChaos;
 uniform float uWarp;
 uniform float uSeed;
+// Импульс: xy — точка удара в кадре, z — сила. uImpulseRing — радиус фронта.
+uniform vec3 uImpulse;
+uniform float uImpulseRing;
+uniform float uLightAngle;
+uniform float uLightFlash;
 uniform vec3 uColorA;
 uniform vec3 uColorB;
 uniform vec3 uColorC;
@@ -85,6 +90,13 @@ float map(vec3 p) {
                * sin(p.z * (3.0 + uDensity * 9.0) + uTime * 0.9);
   shape -= ripple * (0.02 + uChaos * 0.16 + uNoisiness * 0.06);
 
+  // Волна от удара идёт сферическим фронтом и коробит поверхность на своём пути.
+  if (uImpulse.z > 0.001) {
+    vec3 centre = vec3(uImpulse.xy * 2.2, 0.0);
+    float front = abs(length(p - centre) - uImpulseRing * 3.4);
+    shape -= exp(-front * front * 5.0) * uImpulse.z * 0.3;
+  }
+
   // Спутники вокруг основной формы — плотность отвечает за их количество.
   vec3 q = p;
   q.xz *= rot(uTime * 0.4);
@@ -129,7 +141,8 @@ void main() {
   if (hit) {
     vec3 p = origin + dir * travelled;
     vec3 normal = normalAt(p);
-    vec3 light = normalize(vec3(0.6, 0.8, -0.6));
+    // Источник обходит сцену по орбите — тот же угол, что у фона базового слоя.
+    vec3 light = normalize(vec3(cos(uLightAngle) * 0.9, sin(uLightAngle) * 0.9, -0.6));
     float diffuse = max(0.0, dot(normal, light));
     float fresnel = pow(1.0 - max(0.0, dot(normal, -dir)), 2.5);
     float depth = clamp(travelled / 8.0, 0.0, 1.0);
@@ -141,6 +154,7 @@ void main() {
   }
 
   color += uColorC * min(glow, 1.5) * (0.04 + uEnergy * 0.08);
+  color += uColorA * uLightFlash * 0.25;
 
   // Тон-маппинг Рейнхарда: слой кладётся в композицию через 'lighter',
   // поэтому значения выше единицы выбивают кадр в белое — ограничиваем здесь.
@@ -221,9 +235,30 @@ export class RaymarchPrimitive implements DrawPrimitive {
     gl.uniform1f(u.uChaos!, params.chaos);
     gl.uniform1f(u.uWarp!, params.warp);
     gl.uniform1f(u.uSeed!, this.seedValue);
-    setColor(gl, u.uColorA, palette.accent(0.1));
-    setColor(gl, u.uColorB, palette.accent(0.55));
-    setColor(gl, u.uColorC, palette.accent(0.95));
+
+    // Из всех живых волн шейдеру отдаём самую сильную: остальные на форме
+    // всё равно не читаются, а каждая лишняя стоит целого прохода по кадру.
+    const scene = frame.scene;
+    let strongest = null as (typeof scene.impulses)[number] | null;
+    for (const impulse of scene.impulses) {
+      const remaining = impulse.strength * (1 - impulse.age / impulse.life);
+      if (!strongest || remaining > strongest.strength * (1 - strongest.age / strongest.life)) {
+        strongest = impulse;
+      }
+    }
+    if (strongest) {
+      const decay = 1 - strongest.age / strongest.life;
+      gl.uniform3f(u.uImpulse!, strongest.x - 0.5, 0.5 - strongest.y, strongest.strength * decay);
+      gl.uniform1f(u.uImpulseRing!, strongest.radius);
+    } else {
+      gl.uniform3f(u.uImpulse!, 0, 0, 0);
+      gl.uniform1f(u.uImpulseRing!, 0);
+    }
+    gl.uniform1f(u.uLightAngle!, scene.light.angle);
+    gl.uniform1f(u.uLightFlash!, scene.light.flash);
+    setColor(gl, u.uColorA, palette.accentRgb(0.1));
+    setColor(gl, u.uColorB, palette.accentRgb(0.55));
+    setColor(gl, u.uColorC, palette.accentRgb(0.95));
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
@@ -266,6 +301,7 @@ export class RaymarchPrimitive implements DrawPrimitive {
     for (const name of [
       'uResolution', 'uTime', 'uEnergy', 'uBrightness', 'uNoisiness', 'uFlux', 'uBeatPhase',
       'uDensity', 'uSpeed', 'uScale', 'uSharpness', 'uChaos', 'uWarp', 'uSeed',
+      'uImpulse', 'uImpulseRing', 'uLightAngle', 'uLightFlash',
       'uColorA', 'uColorB', 'uColorC',
     ]) {
       this.uniforms[name] = gl.getUniformLocation(program, name);
@@ -275,10 +311,9 @@ export class RaymarchPrimitive implements DrawPrimitive {
   }
 }
 
-function setColor(gl: WebGL2RenderingContext, location: WebGLUniformLocation | null, color: string): void {
+function setColor(gl: WebGL2RenderingContext, location: WebGLUniformLocation | null, color: Rgb): void {
   if (!location) return;
-  const [r, g, b] = parseHsl(color);
-  gl.uniform3f(location, r / 255, g / 255, b / 255);
+  gl.uniform3f(location, color[0] / 255, color[1] / 255, color[2] / 255);
 }
 
 function linkProgram(gl: WebGL2RenderingContext, vertexSource: string, fragmentSource: string): WebGLProgram | null {

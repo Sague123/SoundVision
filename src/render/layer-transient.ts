@@ -1,6 +1,10 @@
 /**
- * Транзиентный слой: короткие модификаторы поверх базы и жанра.
- * Ничего не «помнит» дольше пары сотен миллисекунд — это реакция на удар.
+ * Транзиентный слой — видимая часть импульса.
+ *
+ * Слой ничего не решает сам: он реагирует на импульсы, рождённые сценой.
+ * Поэтому burst, кольцо, вспышка и толчок камеры приходят из одного события
+ * и в одну точку экрана, а эхо памяти повторяет ту же реакцию через половину
+ * и четверть такта — это и отличает живую сцену от независимо мигающих фильтров.
  *
  * Про безопасность: частота полноэкранных вспышек жёстко ограничена
  * (settings.transients.maxFlashHz, потолок — 3 Гц) из-за фотосенситивной эпилепсии.
@@ -10,6 +14,7 @@ import { clamp01 } from '../audio/features.ts';
 import type { MoodVector } from '../audio/mood-vector.ts';
 import type { Settings } from '../settings.ts';
 import type { Palette } from './palette.ts';
+import type { Impulse, SceneState } from './scene.ts';
 
 const MAX_PARTICLES = 900;
 const MAX_RINGS = 8;
@@ -25,6 +30,7 @@ interface Particle {
   maxLife: number;
   tone: number;
   size: number;
+  echo: boolean;
 }
 
 interface Ring {
@@ -35,6 +41,8 @@ interface Ring {
   life: number;
   maxLife: number;
   tone: number;
+  /** Кольцо от эха красится комплементарным цветом — это цветовое эхо из §2.4. */
+  echo: boolean;
 }
 
 export interface TransientDebug {
@@ -61,7 +69,8 @@ export class TransientLayer {
   private glitchUntilMs = 0;
   private lastGlitchMs = -Infinity;
   private prevFlux = 0;
-  private prevSection: MoodVector['section'] = 'calm';
+  /** Номер последнего отработанного импульса: на каждый реагируем ровно раз. */
+  private lastImpulseId = 0;
 
   private scratch: HTMLCanvasElement | null = null;
   private channel: HTMLCanvasElement | null = null;
@@ -89,16 +98,22 @@ export class TransientLayer {
     this.channel = null;
   }
 
-  update(mood: MoodVector, settings: Settings): void {
+  update(mood: MoodVector, settings: Settings, scene: SceneState): void {
     const t = settings.transients;
     const intensity = t.intensity;
     const dt = Math.min(0.05, mood.deltaMs / 1000);
 
-    if (mood.onset && mood.onsetStrength > 0.08) {
-      const power = mood.onsetStrength * intensity;
-      if (t.burst) this.spawnBurst(power, mood);
-      if (t.shockwave && mood.onsetStrength > 0.35) this.spawnRing(power, mood);
-      if (t.shake) this.shakeEnergy = Math.min(1, this.shakeEnergy + power * 0.8);
+    // Реакция на импульсы сцены, а не на onset напрямую: так эхо памяти
+    // порождает точно такой же всплеск, как исходный удар.
+    let strongest = 0;
+    for (const impulse of scene.impulses) {
+      if (impulse.id <= this.lastImpulseId) continue;
+      this.lastImpulseId = impulse.id;
+      strongest = Math.max(strongest, impulse.strength);
+
+      if (t.burst) this.spawnBurst(impulse, intensity);
+      if (t.shockwave && impulse.strength > 0.3) this.spawnRing(impulse, intensity);
+      if (t.shake) this.shakeEnergy = Math.min(1, this.shakeEnergy + impulse.strength * intensity * 0.6);
     }
 
     // Резкий скачок flux — характерный признак глитча/дропа в самом материале.
@@ -111,27 +126,20 @@ export class TransientLayer {
     }
     if (this.glitchUntilMs > 0 && mood.timeMs > this.glitchUntilMs) this.glitchUntilMs = 0;
 
-    const sectionChanged = mood.section !== this.prevSection;
-    this.prevSection = mood.section;
-    if (sectionChanged && mood.section === 'drop') {
-      if (t.shockwave) this.spawnRing(intensity, mood);
-      if (t.shake) this.shakeEnergy = Math.min(1, this.shakeEnergy + intensity);
-    }
-
-    // Вспышка — единственный эффект с жёстким лимитом частоты.
+    // Вспышка — единственный эффект с жёстким лимитом частоты. Саму вспышку
+    // копит свет сцены, здесь только решается, пропустить ли её на экран.
     const flashInterval = t.maxFlashHz > 0 ? 1000 / t.maxFlashHz : Infinity;
-    const wantsFlash = t.strobe && intensity > 0 &&
-      ((mood.onset && mood.onsetStrength > 0.6) || (sectionChanged && mood.section === 'drop'));
-    if (wantsFlash && mood.timeMs - this.lastFlashMs >= flashInterval) {
+    if (t.strobe && intensity > 0 && strongest > 0.55 &&
+        mood.timeMs - this.lastFlashMs >= flashInterval) {
       this.lastFlashMs = mood.timeMs;
-      this.flash = Math.min(0.55, 0.2 + mood.onsetStrength * 0.45) * intensity;
+      this.flash = Math.min(0.5, scene.light.flash * 0.5) * intensity;
       this.flashTone = mood.beatPhase;
     }
 
     this.integrate(dt, mood);
   }
 
-  render(palette: Palette, weight: number): TransientDebug {
+  render(palette: Palette, scene: SceneState, weight: number): TransientDebug {
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.width, this.height);
@@ -139,7 +147,9 @@ export class TransientLayer {
 
     for (const particle of this.particles) {
       const life = particle.life / particle.maxLife;
-      ctx.fillStyle = palette.accentAlpha(particle.tone, life * life * weight);
+      ctx.fillStyle = particle.echo
+        ? palette.echo(1 - life, life * life * weight)
+        : palette.accentAlpha(particle.tone, life * life * weight);
       ctx.beginPath();
       ctx.arc(particle.x, particle.y, particle.size * (0.4 + life * 0.8), 0, Math.PI * 2);
       ctx.fill();
@@ -147,7 +157,10 @@ export class TransientLayer {
 
     for (const ring of this.rings) {
       const life = ring.life / ring.maxLife;
-      ctx.strokeStyle = palette.accentAlpha(ring.tone, life * 0.75 * weight);
+      // Фронт волны от эха уходит в комплементарный цвет и гаснет.
+      ctx.strokeStyle = ring.echo
+        ? palette.echo(1 - life, life * 0.8 * weight)
+        : palette.accentAlpha(ring.tone, life * 0.75 * weight);
       ctx.lineWidth = Math.max(0.6, life * 9);
       ctx.beginPath();
       ctx.arc(ring.x, ring.y, ring.radius, 0, Math.PI * 2);
@@ -155,7 +168,8 @@ export class TransientLayer {
     }
 
     if (this.flash > 0.001) {
-      ctx.fillStyle = palette.accentAlpha(this.flashTone, this.flash * weight);
+      // Вспышка светится цветом сцены: тёплым в мажоре, холодным в миноре.
+      ctx.fillStyle = palette.accentAlpha(this.flashTone + scene.light.warmth * 0.2, this.flash * weight);
       ctx.fillRect(0, 0, this.width, this.height);
     }
 
@@ -253,11 +267,14 @@ export class TransientLayer {
     this.shakeY = Math.sin(angle) * amplitude * (0.6 + mood.energy * 0.6);
   }
 
-  private spawnBurst(power: number, mood: MoodVector): void {
-    const count = Math.min(MAX_PARTICLES - this.particles.length, Math.round(20 + power * 130));
+  /** Частицы разлетаются из точки удара, а не из случайного места экрана. */
+  private spawnBurst(impulse: Impulse, intensity: number): void {
+    const power = impulse.strength * intensity;
+    const count = Math.min(MAX_PARTICLES - this.particles.length, Math.round(14 + power * 120));
     if (count <= 0) return;
-    const cx = this.width / 2 + (Math.random() * 2 - 1) * this.width * 0.22;
-    const cy = this.height / 2 + (Math.random() * 2 - 1) * this.height * 0.22;
+
+    const cx = impulse.x * this.width;
+    const cy = impulse.y * this.height;
     const baseSpeed = Math.min(this.width, this.height) * (0.25 + power * 0.9);
 
     for (let i = 0; i < count; i++) {
@@ -271,23 +288,26 @@ export class TransientLayer {
         vy: Math.sin(angle) * speed,
         life: maxLife,
         maxLife,
-        tone: (mood.beatPhase + Math.random() * 0.4) % 1,
+        tone: (impulse.x + Math.random() * 0.4) % 1,
         size: 1 + Math.random() * (1.5 + power * 3),
+        echo: impulse.echo,
       });
     }
   }
 
-  private spawnRing(power: number, mood: MoodVector): void {
+  private spawnRing(impulse: Impulse, intensity: number): void {
     if (this.rings.length >= MAX_RINGS) this.rings.shift();
+    const power = impulse.strength * intensity;
     const maxLife = 0.5 + power * 0.5;
     this.rings.push({
-      x: this.width / 2,
-      y: this.height / 2,
+      x: impulse.x * this.width,
+      y: impulse.y * this.height,
       radius: Math.min(this.width, this.height) * 0.04,
       speed: Math.max(this.width, this.height) * (0.5 + power * 1.1),
       life: maxLife,
       maxLife,
-      tone: clamp01(mood.energy),
+      tone: clamp01(power),
+      echo: impulse.echo,
     });
   }
 

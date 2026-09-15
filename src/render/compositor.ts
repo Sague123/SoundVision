@@ -11,8 +11,9 @@ import { Generator } from './generator.ts';
 import { BaseLayer } from './layer-base.ts';
 import { GenreLayer } from './layer-genre.ts';
 import { TransientLayer, type TransientDebug } from './layer-transient.ts';
-import { buildPalette, findScheme, type ColorScheme, type Palette } from './palette.ts';
+import { findHarmony, PaletteEngine, type HarmonyScheme, type Palette } from './palette.ts';
 import type { PrimitiveId, RenderFrame } from './primitives/types.ts';
+import { Scene, type SceneState } from './scene.ts';
 import { trackKey } from './seed.ts';
 
 export interface CompositorStats {
@@ -22,8 +23,11 @@ export interface CompositorStats {
   baseId: PrimitiveId;
   transient: TransientDebug;
   palette: Palette;
+  scene: SceneState;
   effectiveQuality: number;
   seedLabel: string;
+  /** Имя действующей гармонической схемы — для панели и отладки. */
+  harmonyName: string;
 }
 
 /** Ниже этого fps начинаем экономить на разрешении шейдера. */
@@ -39,6 +43,8 @@ export class Compositor {
   private readonly genre = new GenreLayer();
   private readonly transient = new TransientLayer();
   private readonly generator: Generator;
+  private readonly paletteEngine = new PaletteEngine();
+  private readonly scene = new Scene();
 
   private width = 1;
   private height = 1;
@@ -95,17 +101,22 @@ export class Compositor {
 
   render(mood: MoodVector, settings: Settings, cover: CoverArt): CompositorStats {
     const started = performance.now();
-    const palette = this.buildPalette(mood, settings, cover);
+    const harmony = this.activeHarmony(settings);
+
+    // Сцена идёт первой: от неё зависят и палитра, и набор примитивов, и камера.
+    const scene = this.scene.update(mood, clamp01(settings.transients.intensity));
+    const palette = this.buildPalette(mood, settings, cover, harmony);
     this.lastPalette = palette;
 
     this.applyQuality(mood.timeMs, settings);
-    const state = this.generator.update(mood, settings);
+    const state = this.generator.update(mood, settings, scene);
 
     const frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight'> = {
       width: this.width,
       height: this.height,
       mood,
       palette,
+      scene,
       dtMs: mood.deltaMs,
       timeMs: mood.timeMs,
     };
@@ -113,12 +124,12 @@ export class Compositor {
     if (settings.layers.base.enabled) this.base.render(frame, state, settings, cover);
     const activePrimitives = settings.layers.genre.enabled ? this.genre.render(frame, state) : [];
 
-    this.transient.update(mood, settings);
+    this.transient.update(mood, settings, scene);
     const transientDebug = settings.layers.transient.enabled
-      ? this.transient.render(palette, clamp01(settings.layers.transient.weight))
+      ? this.transient.render(palette, scene, clamp01(settings.layers.transient.weight))
       : { particles: 0, rings: 0, glitch: false, flash: 0 };
 
-    this.compose(settings);
+    this.compose(settings, scene);
     if (settings.layers.transient.enabled) this.transient.applyGlitch(this.ctx, mood, settings);
 
     const frameMs = performance.now() - started;
@@ -131,8 +142,10 @@ export class Compositor {
       baseId: state.baseId,
       transient: transientDebug,
       palette,
+      scene,
       effectiveQuality: this.effectiveQuality,
       seedLabel: state.seed.label,
+      harmonyName: harmony.name,
     };
   }
 
@@ -141,7 +154,12 @@ export class Compositor {
     this.genre.dispose();
   }
 
-  private compose(settings: Settings): void {
+  /**
+   * Сведение слоёв через камеру. Камера — такая же сущность сцены, как свет и
+   * вещество: её дрейф, орбита, наезд и крен применяются здесь одним
+   * преобразованием, поверх которого ложится толчок от импульса.
+   */
+  private compose(settings: Settings, scene: SceneState): void {
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = 'source-over';
@@ -150,12 +168,25 @@ export class Compositor {
     ctx.fillRect(0, 0, this.width, this.height);
 
     const shake = settings.layers.transient.enabled ? this.transient.shake : { x: 0, y: 0 };
-    const shakeAmount = Math.max(Math.abs(shake.x), Math.abs(shake.y));
-    // Небольшой оверскейл, чтобы тряска не открывала чёрные поля по краям.
-    const overscale = 1 + (shakeAmount / Math.min(this.width, this.height)) * 2.2;
-    const offsetX = shake.x - (this.width * (overscale - 1)) / 2;
-    const offsetY = shake.y - (this.height * (overscale - 1)) / 2;
-    ctx.setTransform(overscale, 0, 0, overscale, offsetX, offsetY);
+    const minSide = Math.min(this.width, this.height);
+    const camera = settings.camera.enabled ? scene.camera : IDLE_CAMERA;
+    const amount = clamp01(settings.camera.amount);
+
+    const offsetX = camera.x * minSide * amount + shake.x;
+    const offsetY = camera.y * minSide * amount + shake.y;
+    const roll = camera.roll * amount;
+    const shakeMargin = Math.max(Math.abs(offsetX), Math.abs(offsetY)) / minSide;
+    // Кадр должен покрыть себя после поворота и сдвига, иначе по краям чернота.
+    const overscale = coverScale(this.width, this.height, roll) * (1 + shakeMargin * 2.2);
+    const scale = Math.max(1, camera.zoom * amount + (1 - amount)) * overscale;
+
+    const cx = this.width / 2;
+    const cy = this.height / 2;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.translate(cx + offsetX, cy + offsetY);
+    ctx.rotate(roll);
+    ctx.scale(scale, scale);
+    ctx.translate(-cx, -cy);
 
     if (settings.layers.base.enabled) {
       ctx.globalCompositeOperation = 'source-over';
@@ -181,18 +212,26 @@ export class Compositor {
     ctx.globalAlpha = 1;
   }
 
-  private buildPalette(mood: MoodVector, settings: Settings, cover: CoverArt): Palette {
-    const scheme: ColorScheme = settings.palette.useCustom
-      ? { id: 'custom', name: 'Custom', major: settings.palette.custom.major, minor: settings.palette.custom.minor }
-      : findScheme(settings.palette.schemeId);
+  /** 'auto' — схему выбирает seed трека; иначе пользователь фиксирует её вручную. */
+  private activeHarmony(settings: Settings): HarmonyScheme {
+    return findHarmony(settings.palette.harmonyId === 'auto'
+      ? this.generator.seed.harmonyId
+      : settings.palette.harmonyId);
+  }
 
-    const useCover = settings.cover.useForPalette;
-    return buildPalette({
-      scheme,
+  private buildPalette(
+    mood: MoodVector,
+    settings: Settings,
+    cover: CoverArt,
+    harmony: HarmonyScheme,
+  ): Palette {
+    return this.paletteEngine.build({
       mood,
-      hueShift: this.generator.seed.hueShift,
-      coverHue: useCover ? cover.hue : null,
-      coverSaturation: useCover ? cover.saturation : null,
+      tuning: settings.palette.tuning,
+      harmony,
+      seedHueShift: this.generator.seed.hueShift,
+      cover,
+      useCover: settings.cover.useForPalette,
     });
   }
 
@@ -229,5 +268,22 @@ export class Compositor {
     const seed = this.generator.seed;
     this.base.reseed(seed);
     this.genre.reseed(seed);
+    this.scene.reseed(seed);
   }
+}
+
+/** Камера в покое: ею подменяется сцена, когда камера выключена в настройках. */
+const IDLE_CAMERA = { x: 0, y: 0, zoom: 1, roll: 0 } as const;
+
+/**
+ * Минимальный масштаб, при котором повёрнутый кадр всё ещё накрывает экран.
+ * Без него крен камеры открывает чёрные клинья по углам.
+ */
+function coverScale(width: number, height: number, roll: number): number {
+  const sin = Math.abs(Math.sin(roll));
+  const cos = Math.abs(Math.cos(roll));
+  return Math.max(
+    (width * cos + height * sin) / width,
+    (height * cos + width * sin) / height,
+  );
 }

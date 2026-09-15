@@ -5,6 +5,7 @@
 
 import type { MoodVector } from '../audio/mood-vector.ts';
 import type { CompositorStats } from '../render/compositor.ts';
+import { SUBSTANCE_LABELS } from '../render/scene.ts';
 
 const HISTORY = 240;
 const GRAPH_HEIGHT = 34;
@@ -66,6 +67,15 @@ export class DebugOverlay {
       `key      ${mood.key.tonic} ${mood.key.mode} (conf ${mood.key.confidence.toFixed(2)})`,
       `section  ${mood.section}  slope ${mood.energySlope.toFixed(3)}`,
       `chroma   ${[...mood.chroma].map((v) => v.toFixed(1)).join(' ')}`,
+      `вещество ${SUBSTANCE_LABELS[stats.scene.substance.nearest]} ось ${stats.scene.substance.axis.toFixed(2)}` +
+        ` жёстк ${stats.scene.substance.stiffness.toFixed(2)} деформ ${stats.scene.substance.deformation.toFixed(2)}`,
+      `свет     угол ${stats.scene.light.angle.toFixed(2)} инт ${stats.scene.light.intensity.toFixed(2)}` +
+        ` вспышка ${stats.scene.light.flash.toFixed(2)} тепло ${stats.scene.light.warmth.toFixed(2)}`,
+      `камера   x ${stats.scene.camera.x.toFixed(3)} y ${stats.scene.camera.y.toFixed(3)}` +
+        ` zoom ${stats.scene.camera.zoom.toFixed(3)} крен ${stats.scene.camera.roll.toFixed(3)}`,
+      `импульсы ${stats.scene.impulses.length} (эхо ${stats.scene.impulses.filter((i) => i.echo).length})` +
+        ` энергия ${stats.scene.impulseEnergy.toFixed(2)}`,
+      `палитра  ${stats.harmonyName}, оттенок ${stats.palette.hue.toFixed(0)}°`,
       `base     ${stats.baseId}`,
       `active   ${stats.activePrimitives.join(', ') || '—'}`,
       `transient particles ${stats.transient.particles} rings ${stats.transient.rings}` +

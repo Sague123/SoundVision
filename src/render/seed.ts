@@ -4,6 +4,7 @@
  * дальше всё двигает mood vector.
  */
 
+import { HARMONY_SCHEMES } from './color/harmony.ts';
 import { ALL_PRIMITIVE_IDS, type PrimitiveId } from './primitives/types.ts';
 
 export type Rng = () => number;
@@ -38,6 +39,11 @@ export interface GeneratorSeed {
   symmetry: number;
   /** Сдвиг оттенка палитры в градусах, -40..40. */
   hueShift: number;
+  /**
+   * Гармоническая схема построения палитры. Из-за неё два трека в одной
+   * тональности всё равно звучат по-разному в цвете.
+   */
+  harmonyId: string;
   /** Множитель скорости морфинга, 0.7..1.5. */
   morphRate: number;
   /** Стартовые смещения по каждому примитиву — чтобы фазы не совпадали. */
@@ -72,6 +78,7 @@ export function makeSeed(trackKey: string, salt = 0): GeneratorSeed {
     pool,
     symmetry: 3 + Math.floor(rng() * 10),
     hueShift: (rng() * 2 - 1) * 40,
+    harmonyId: HARMONY_SCHEMES[Math.floor(rng() * HARMONY_SCHEMES.length)].id,
     morphRate: 0.7 + rng() * 0.8,
     phase,
   };

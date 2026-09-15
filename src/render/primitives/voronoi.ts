@@ -1,5 +1,4 @@
 import { SimplexNoise } from '../noise.ts';
-import { parseHsl } from '../palette.ts';
 import { mulberry32, type GeneratorSeed } from '../seed.ts';
 import type { DrawPrimitive, RenderFrame } from './types.ts';
 
@@ -108,11 +107,9 @@ export class VoronoiPrimitive implements DrawPrimitive {
       this.siteY[i] = (0.5 + this.noise.noise2D(site.seedY, t * drift + 17.3) * 0.55) * fh;
     }
 
-    // Предрассчитанные цвета ячеек: hsl-парсинг на каждый пиксель недопустим.
+    // Цвета ячеек считаем один раз на пересчёт поля, а не на каждый пиксель.
     const colors: Array<[number, number, number]> = [];
-    for (let i = 0; i < count; i++) {
-      colors.push(parseHsl(palette.accent(this.sites[i].tone)));
-    }
+    for (let i = 0; i < count; i++) colors.push(palette.accentRgb(this.sites[i].tone));
 
     // Чем выше sharpness, тем уже светящаяся граница между ячейками.
     const edgeWidth = 0.28 - params.sharpness * 0.22;

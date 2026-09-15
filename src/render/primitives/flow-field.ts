@@ -5,6 +5,11 @@ import type { DrawPrimitive, RenderFrame } from './types.ts';
 const MAX_PARTICLES = 2600;
 const COLOR_BANDS = 6;
 const TAU = Math.PI * 2;
+/**
+ * Сколько волн одновременно толкают вещество. Больше трёх на глаз уже не
+ * различить, а стоимость растёт линейно по числу частиц.
+ */
+const MAX_PUSHING_WAVES = 3;
 
 /**
  * Частицы, которых несёт поле симплекс-шума. Самый «читаемый» примитив:
@@ -52,6 +57,22 @@ export class FlowFieldPrimitive implements DrawPrimitive {
     const velocity = 30 + params.speed * 230 + mood.energy * 260;
     const step = velocity * dt;
 
+    // Фронты волн от ударов: вещество расталкивается там, где проходит волна.
+    const diagonal = Math.hypot(this.width, this.height);
+    const waves = frame.scene.impulses
+      .slice()
+      .sort((a, b) => b.strength - a.strength)
+      .slice(0, MAX_PUSHING_WAVES)
+      .map((impulse) => ({
+        x: impulse.x * this.width,
+        y: impulse.y * this.height,
+        // Радиус фронта и его толщина — в пикселях, чтобы не считать это в цикле.
+        ring: impulse.radius * diagonal,
+        thickness: diagonal * 0.06,
+        force: impulse.strength * (1 - impulse.age / impulse.life) * velocity * 2.4 * dt,
+      }))
+      .filter((wave) => wave.force > 0.01);
+
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
@@ -68,8 +89,22 @@ export class FlowFieldPrimitive implements DrawPrimitive {
         const x = this.xs[i];
         const y = this.ys[i];
         const angle = this.noise.noise3D(x * fieldScale, y * fieldScale, t) * TAU * turbulence;
-        const nx = x + Math.cos(angle) * step;
-        const ny = y + Math.sin(angle) * step;
+        let nx = x + Math.cos(angle) * step;
+        let ny = y + Math.sin(angle) * step;
+
+        for (const wave of waves) {
+          const dx = x - wave.x;
+          const dy = y - wave.y;
+          const distance = Math.hypot(dx, dy);
+          if (distance < 1e-3) continue;
+          // Гауссиана вокруг фронта: толкает только там, где волна сейчас проходит.
+          const offset = (distance - wave.ring) / wave.thickness;
+          const falloff = Math.exp(-offset * offset);
+          if (falloff < 0.01) continue;
+          const push = (wave.force * falloff) / distance;
+          nx += dx * push;
+          ny += dy * push;
+        }
 
         ctx.moveTo(x, y);
         ctx.lineTo(nx, ny);

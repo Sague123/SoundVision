@@ -3,7 +3,7 @@
  * её же редактирует панель настроек — больше состояния настроек нигде нет.
  */
 
-import type { PaletteSpec } from './render/palette.ts';
+import { defaultTuning, type PaletteTuning } from './render/palette.ts';
 import { ALL_PRIMITIVE_IDS, type PrimitiveId } from './render/primitives/types.ts';
 
 export interface LayerSettings {
@@ -28,6 +28,12 @@ export interface Settings {
     genre: LayerSettings;
     transient: LayerSettings;
   };
+  camera: {
+    /** Дрейф, орбита, наезд и крен наблюдателя внутри сцены. */
+    enabled: boolean;
+    /** Общая амплитуда движения камеры, 0..1. */
+    amount: number;
+  };
   generator: {
     /** auto — набор примитивов выбирает mood vector; manual — список ниже. */
     mode: 'auto' | 'manual';
@@ -38,9 +44,9 @@ export interface Settings {
     quality: number;
   };
   palette: {
-    schemeId: string;
-    useCustom: boolean;
-    custom: { major: PaletteSpec; minor: PaletteSpec };
+    /** Гармоническая схема; 'auto' — её выбирает seed трека. */
+    harmonyId: string;
+    tuning: PaletteTuning;
   };
   transients: {
     burst: boolean;
@@ -97,6 +103,10 @@ export function defaultSettings(): Settings {
       genre: { enabled: true, weight: 1 },
       transient: { enabled: true, weight: 0.85 },
     },
+    camera: {
+      enabled: true,
+      amount: 0.7,
+    },
     generator: {
       mode: 'auto',
       manual: ['flow-field', 'metaballs'],
@@ -104,12 +114,8 @@ export function defaultSettings(): Settings {
       quality: 0.5,
     },
     palette: {
-      schemeId: 'aurora',
-      useCustom: false,
-      custom: {
-        major: { hue: 150, spread: 80, saturation: 74, lightness: 58 },
-        minor: { hue: 250, spread: 70, saturation: 60, lightness: 44 },
-      },
+      harmonyId: 'auto',
+      tuning: defaultTuning(),
     },
     transients: {
       burst: true,
@@ -152,7 +158,8 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
     apply: (s) => {
       s.audio.onsetThreshold = 1.3;
       s.audio.smoothing = 0.6;
-      s.palette.schemeId = 'ember';
+      s.palette.harmonyId = 'split-complementary';
+      s.palette.tuning.chromaBoost = 1.15;
       s.generator.mode = 'auto';
       s.transients.intensity = 0.85;
       s.transients.shake = true;
@@ -165,7 +172,8 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
     apply: (s) => {
       s.audio.onsetThreshold = 1.55;
       s.audio.smoothing = 0.68;
-      s.palette.schemeId = 'neon';
+      s.palette.harmonyId = 'complementary';
+      s.palette.tuning.chromaBoost = 1.35;
       s.generator.morphRate = 1.4;
       s.transients.intensity = 1;
       s.transients.glitch = true;
@@ -177,9 +185,11 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
     apply: (s) => {
       s.audio.smoothing = 0.88;
       s.audio.onsetThreshold = 1.8;
-      s.palette.schemeId = 'tide';
+      s.palette.harmonyId = 'analogous';
+      s.palette.tuning.chromaBoost = 0.7;
       s.generator.morphRate = 0.5;
       s.layers.transient.weight = 0.3;
+      s.camera.amount = 0.4;
       s.transients.intensity = 0.25;
       s.transients.strobe = false;
       s.transients.shake = false;
@@ -197,16 +207,14 @@ export function mergeSettings(saved: unknown): Settings {
   const source = saved as Record<string, unknown>;
 
   mergeSection(base.audio, source.audio);
+  mergeSection(base.camera, source.camera);
   mergeSection(base.generator, source.generator);
   mergeSection(base.transients, source.transients);
   mergeSection(base.sources, source.sources);
   mergeSection(base.cover, source.cover);
   mergeSection(base.lyrics, source.lyrics);
-  mergeSection(base.palette, source.palette, ['custom']);
-  if (isRecord(source.palette) && isRecord(source.palette.custom)) {
-    mergeSection(base.palette.custom.major, source.palette.custom.major);
-    mergeSection(base.palette.custom.minor, source.palette.custom.minor);
-  }
+  mergeSection(base.palette, source.palette, ['tuning']);
+  if (isRecord(source.palette)) mergeSection(base.palette.tuning, source.palette.tuning);
   if (isRecord(source.layers)) {
     for (const key of ['base', 'genre', 'transient'] as const) {
       mergeSection(base.layers[key], source.layers[key]);

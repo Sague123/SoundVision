@@ -2,6 +2,7 @@
 
 import type { MoodVector } from '../../audio/mood-vector.ts';
 import type { Palette } from '../palette.ts';
+import type { SceneState } from '../scene.ts';
 import type { GeneratorSeed } from '../seed.ts';
 
 export const ALL_PRIMITIVE_IDS = [
@@ -55,6 +56,8 @@ export interface RenderFrame {
   height: number;
   mood: MoodVector;
   palette: Palette;
+  /** Состояние сцены: вещество, свет, камера, живые импульсы. */
+  scene: SceneState;
   params: GenParams;
   /** Вклад примитива прямо сейчас, 0..1 — этим делается кроссфейд. */
   weight: number;

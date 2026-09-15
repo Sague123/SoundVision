@@ -6,6 +6,7 @@
 import { clamp01 } from '../audio/features.ts';
 import type { CoverArt } from '../cover/cover-art.ts';
 import type { Settings } from '../settings.ts';
+import type { Light } from './scene.ts';
 import { createPrimitive } from './generator.ts';
 import type { GeneratorState } from './generator.ts';
 import { BASE_LAYER_IDS } from './generator.ts';
@@ -42,7 +43,7 @@ export class BaseLayer {
   }
 
   render(frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight'>, state: GeneratorState, settings: Settings, cover: CoverArt): void {
-    const { palette, mood } = frame;
+    const { palette, mood, scene } = frame;
     const ctx = this.ctx;
 
     // Заливка фоном служит и очисткой, и затуханием следов: чем ниже alpha,
@@ -57,7 +58,15 @@ export class BaseLayer {
       ctx.globalAlpha = fade * 0.72; // градиент поверх обложки, но не вместо неё
     }
 
-    const gradient = ctx.createLinearGradient(0, 0, this.width * 0.35, this.height);
+    // Градиент фона направлен от источника света — он обходит сцену по орбите,
+    // поэтому «освещённая сторона» медленно едет вместе с ним.
+    const reach = Math.hypot(this.width, this.height) * 0.5;
+    const lx = Math.cos(scene.light.angle) * reach;
+    const ly = Math.sin(scene.light.angle) * reach;
+    const gradient = ctx.createLinearGradient(
+      this.width / 2 - lx, this.height / 2 - ly,
+      this.width / 2 + lx, this.height / 2 + ly,
+    );
     gradient.addColorStop(0, palette.bgTop);
     gradient.addColorStop(1, palette.bgBottom);
     ctx.fillStyle = gradient;
@@ -74,7 +83,18 @@ export class BaseLayer {
       });
     }
 
-    this.drawVignette(mood.energy);
+    // Вспышка света — общая для всей сцены реакция на удар, здесь она видна
+    // как мгновенная подсветка вещества снизу.
+    if (scene.light.flash > 0.01) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = Math.min(0.35, scene.light.flash * 0.3);
+      ctx.fillStyle = palette.accent(scene.light.warmth);
+      ctx.fillRect(0, 0, this.width, this.height);
+      ctx.restore();
+    }
+
+    this.drawVignette(mood.energy, scene.light);
   }
 
   dispose(): void {
@@ -95,12 +115,17 @@ export class BaseLayer {
     ctx.restore();
   }
 
-  /** Виньетка собирает взгляд к центру и прячет края на большом экране. */
-  private drawVignette(energy: number): void {
+  /**
+   * Виньетка собирает взгляд к центру и прячет края на большом экране.
+   * Её центр смещён к источнику света: тень падает с противоположной стороны.
+   */
+  private drawVignette(energy: number, light: Light): void {
     const ctx = this.ctx;
     const radius = Math.hypot(this.width, this.height) / 2;
+    const shiftX = Math.cos(light.angle) * this.width * 0.06;
+    const shiftY = Math.sin(light.angle) * this.height * 0.06;
     const gradient = ctx.createRadialGradient(
-      this.width / 2, this.height / 2, radius * 0.32,
+      this.width / 2 + shiftX, this.height / 2 + shiftY, radius * 0.32,
       this.width / 2, this.height / 2, radius,
     );
     gradient.addColorStop(0, 'rgba(0,0,0,0)');

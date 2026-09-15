@@ -1,4 +1,3 @@
-import { parseHsl } from '../palette.ts';
 import { mulberry32, type GeneratorSeed, type Rng } from '../seed.ts';
 import type { DrawPrimitive, RenderFrame } from './types.ts';
 
@@ -150,7 +149,7 @@ export class CellularPrimitive implements DrawPrimitive {
     const { palette, mood } = frame;
     // Палитра берётся полосами по высоте — получается градиент по сетке.
     const stops: Array<[number, number, number]> = [];
-    for (let i = 0; i < 8; i++) stops.push(parseHsl(palette.accent(i / 7)));
+    for (let i = 0; i < 8; i++) stops.push(palette.accentRgb(i / 7));
 
     for (let y = 0; y < this.rows; y++) {
       const band = stops[Math.min(7, Math.floor((y / this.rows) * 8))];

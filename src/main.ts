@@ -13,7 +13,8 @@ import { SpotifyClient } from './cover/spotify.ts';
 import { YouTubeMusicBridge } from './cover/youtube-music-bridge.ts';
 import { fetchLyrics } from './lyrics/lrclib.ts';
 import { SyncEngine } from './lyrics/sync-engine.ts';
-import { Compositor } from './render/compositor.ts';
+import { Compositor, type CompositorStats } from './render/compositor.ts';
+import { SUBSTANCE_LABELS } from './render/scene.ts';
 import type { Settings } from './settings.ts';
 import { DebugOverlay } from './ui/debug-overlay.ts';
 import { LyricsOverlay } from './ui/lyrics-overlay.ts';
@@ -160,14 +161,15 @@ class App {
 
     if (mood.timeMs - this.lastStatusMs > STATUS_INTERVAL_MS) {
       this.lastStatusMs = mood.timeMs;
-      if (this.panel.isOpen) this.updateStatus(mood, stats.fps, stats.activePrimitives.join(', '), stats.seedLabel);
+      if (this.panel.isOpen) this.updateStatus(mood, stats);
     }
   }
 
-  private updateStatus(mood: MoodVector, fps: number, primitives: string, seed: string): void {
+  private updateStatus(mood: MoodVector, stats: CompositorStats): void {
     const spotifyState = this.spotify.state;
+    const { substance } = stats.scene;
     this.panel.setStatus({
-      fps,
+      fps: stats.fps,
       bpm: mood.bpm,
       key: `${mood.key.tonic} ${mood.key.mode === 'major' ? 'мажор' : 'минор'}`,
       section: mood.section,
@@ -175,8 +177,10 @@ class App {
       spotify: spotifyState.error ?? spotifyState.status,
       bridge: this.bridge.state,
       lyrics: this.lyricsStatus,
-      primitives,
-      seed,
+      primitives: stats.activePrimitives.join(', '),
+      seed: stats.seedLabel,
+      substance: `${SUBSTANCE_LABELS[substance.nearest]} ${substance.axis.toFixed(2)}`,
+      harmony: stats.harmonyName,
     });
   }
 

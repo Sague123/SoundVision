@@ -8,6 +8,7 @@
 
 import type { MoodVector, Section } from '../audio/mood-vector.ts';
 import { clamp, clamp01 } from '../audio/features.ts';
+import type { SceneState } from './scene.ts';
 import type { Settings } from '../settings.ts';
 import { makeSeed, mulberry32, type GeneratorSeed } from './seed.ts';
 import { CellularPrimitive } from './primitives/cellular.ts';
@@ -41,6 +42,25 @@ const BASE_LAYER_IDS: PrimitiveId[] = ['flow-field', 'metaballs', 'voronoi'];
 
 /** Бонус уже активному примитиву — гасит дребезг на границе рейтинга. */
 const INCUMBENT_BONUS = 0.08;
+
+/**
+ * Место каждого примитива на оси агрегатного состояния вещества:
+ * 0 — туман, 0.33 — жидкость, 0.66 — кристалл, 1 — плазма.
+ * Это главный источник рейтинга: набор на экране — прямое следствие того,
+ * из чего сейчас сделан мир.
+ */
+const SUBSTANCE_POSITION: Record<PrimitiveId, number> = {
+  'flow-field': 0.05,
+  'l-system': 0.26,
+  metaballs: 0.36,
+  voronoi: 0.66,
+  cellular: 0.74,
+  kaleidoscope: 0.78,
+  raymarch: 0.97,
+};
+
+/** Насколько узко примитив держится своего места на оси. */
+const SUBSTANCE_TOLERANCE = 0.42;
 
 export interface GeneratorState {
   seed: GeneratorSeed;
@@ -108,13 +128,13 @@ export class Generator {
     return this.seedValue;
   }
 
-  update(mood: MoodVector, settings: Settings): GeneratorState {
+  update(mood: MoodVector, settings: Settings, scene: SceneState): GeneratorState {
     const dt = Math.min(0.1, mood.deltaMs / 1000);
     const morphRate = settings.generator.morphRate * this.seedValue.morphRate;
     // Кроссфейд: чем выше morphRate, тем быстрее веса догоняют цель.
     const k = 1 - Math.exp(-dt * 0.9 * morphRate);
 
-    const targets = this.targetWeights(mood, settings);
+    const targets = this.targetWeights(mood, settings, scene);
     for (const id of ALL_PRIMITIVE_IDS) {
       const current = this.weights.get(id) ?? 0;
       this.weights.set(id, lerp(current, targets.get(id) ?? 0, k));
@@ -123,12 +143,12 @@ export class Generator {
     const kaleidoscopeTarget = targets.get('kaleidoscope') ?? 0;
     this.kaleidoscope = lerp(this.kaleidoscope, kaleidoscopeTarget, k);
 
-    this.updateBase(mood, settings, k);
+    this.updateBase(mood, settings, scene, k);
 
     return {
       seed: this.seedValue,
-      baseParams: this.baseLayerParams(mood),
-      genreParams: this.genreLayerParams(mood),
+      baseParams: this.baseLayerParams(mood, scene),
+      genreParams: this.genreLayerParams(mood, scene),
       weights: this.weights,
       kaleidoscopeWeight: this.kaleidoscope,
       baseId: this.baseId,
@@ -140,7 +160,7 @@ export class Generator {
    * Рейтинг «уместности» → целевые веса. В auto набор берётся из пула трека,
    * в manual — ровно то, что выбрал пользователь.
    */
-  private targetWeights(mood: MoodVector, settings: Settings): Map<PrimitiveId, number> {
+  private targetWeights(mood: MoodVector, settings: Settings, scene: SceneState): Map<PrimitiveId, number> {
     const targets = new Map<PrimitiveId, number>();
     for (const id of ALL_PRIMITIVE_IDS) targets.set(id, 0);
 
@@ -156,7 +176,7 @@ export class Generator {
     const scored = pool
       .map((id) => ({
         id,
-        score: this.affinity(id, mood) + ((this.weights.get(id) ?? 0) > 0.15 ? INCUMBENT_BONUS : 0),
+        score: this.affinity(id, mood, scene) + ((this.weights.get(id) ?? 0) > 0.15 ? INCUMBENT_BONUS : 0),
       }))
       .sort((a, b) => b.score - a.score);
 
@@ -169,14 +189,22 @@ export class Generator {
     }
 
     if (this.seedValue.pool.includes('kaleidoscope')) {
-      targets.set('kaleidoscope', smoothstep(0.42, 0.88, this.affinity('kaleidoscope', mood)));
+      targets.set('kaleidoscope', smoothstep(0.42, 0.88, this.affinity('kaleidoscope', mood, scene)));
     }
     return targets;
   }
 
-  /** Насколько примитив «к месту» при текущем настроении, примерно 0..1. */
-  private affinity(id: PrimitiveId, mood: MoodVector): number {
+  /**
+   * Насколько примитив «к месту», примерно 0..1.
+   *
+   * Основа — расстояние до текущей точки на оси вещества; поверх неё
+   * настроение и смещение от seed'а трека. Так набор примитивов становится
+   * проявлением агрегатного состояния, а не отдельным независимым выбором.
+   */
+  private affinity(id: PrimitiveId, mood: MoodVector, scene: SceneState): number {
     const bias = this.bias.get(id) ?? 0;
+    const distance = Math.abs(scene.substance.axis - SUBSTANCE_POSITION[id]);
+    const substanceFit = Math.max(0, 1 - distance / SUBSTANCE_TOLERANCE);
     const drop = mood.section === 'drop' ? 1 : 0;
     const calm = mood.section === 'calm' ? 1 : 0;
     const buildup = mood.section === 'buildup' ? 1 : 0;
@@ -205,14 +233,15 @@ export class Generator {
         score = 0.25 + mood.brightness * 0.3 + drop * 0.35 + buildup * 0.15 - mood.noisiness * 0.2;
         break;
     }
-    return clamp01(score + bias);
+    // Вещество весит больше настроения: оно и есть «из чего сделан мир».
+    return clamp01(substanceFit * 0.62 + score * 0.38 + bias);
   }
 
   /**
    * Базовый слой реагирует на тональность и энергию, поэтому меняется редко:
    * его примитив переключается не чаще раза в 20 секунд.
    */
-  private updateBase(mood: MoodVector, settings: Settings, k: number): void {
+  private updateBase(mood: MoodVector, settings: Settings, scene: SceneState, k: number): void {
     const allowed = settings.generator.mode === 'manual'
       ? settings.generator.manual.filter((id) => BASE_LAYER_IDS.includes(id))
       : this.seedValue.pool.filter((id) => BASE_LAYER_IDS.includes(id));
@@ -223,7 +252,7 @@ export class Generator {
       let best = candidates[0];
       let bestScore = -Infinity;
       for (const id of candidates) {
-        const score = this.affinity(id, mood);
+        const score = this.affinity(id, mood, scene);
         if (score > bestScore) {
           bestScore = score;
           best = id;
@@ -237,8 +266,8 @@ export class Generator {
   }
 
   /** Медленный, «дышащий» вариант параметров: фон не должен спорить с жанровым слоем. */
-  private baseLayerParams(mood: MoodVector): GenParams {
-    const genre = this.genreLayerParams(mood);
+  private baseLayerParams(mood: MoodVector, scene: SceneState): GenParams {
+    const genre = this.genreLayerParams(mood, scene);
     return {
       ...genre,
       density: genre.density * 0.55,
@@ -250,18 +279,21 @@ export class Generator {
     };
   }
 
-  private genreLayerParams(mood: MoodVector): GenParams {
+  private genreLayerParams(mood: MoodVector, scene: SceneState): GenParams {
     const tempo = smoothstep(70, 170, mood.bpm);
+    const { substance } = scene;
     return {
-      density: clamp01(0.18 + mood.energy * 0.6 + (mood.section === 'drop' ? 0.2 : 0)),
-      speed: clamp01(0.12 + tempo * 0.5 + mood.energy * 0.35),
+      density: clamp01(0.18 + mood.energy * 0.5 + substance.axis * 0.25 + (mood.section === 'drop' ? 0.15 : 0)),
+      speed: clamp01(0.12 + tempo * 0.45 + mood.energy * 0.3 + scene.impulseEnergy * 0.2),
       // Яркий тембр — мелкая деталь; глухой — крупные пятна.
       scale: clamp01(0.85 - mood.brightness * 0.6),
-      sharpness: clamp01(mood.brightness * 0.6 + mood.noisiness * 0.4),
-      chaos: clamp01(mood.noisiness * 0.7 + mood.flux * 0.4),
-      warp: clamp01(mood.flux * 0.8 + Math.abs(mood.energySlope) * 0.3),
-      // На затишье следы длиннее — картинка «залипает», как и музыка.
-      trail: clamp01(0.75 - mood.energy * 0.45 + (mood.section === 'calm' ? 0.15 : 0)),
+      // Жёсткость вещества — это и есть резкость форм: туман мягкий, кристалл колется.
+      sharpness: clamp01(substance.stiffness * 0.7 + mood.brightness * 0.3),
+      chaos: clamp01(mood.noisiness * 0.5 + mood.flux * 0.3 + substance.axis * 0.3),
+      // Пространство коробит проходящими волнами — это видимая часть импульса.
+      warp: clamp01(substance.deformation * 0.7 + mood.flux * 0.4),
+      // Память сцены сама решает, насколько долго держатся следы.
+      trail: clamp01(scene.memoryTrail + (mood.section === 'calm' ? 0.12 : 0)),
       symmetry: clamp(3, 12, this.seedValue.symmetry),
     };
   }

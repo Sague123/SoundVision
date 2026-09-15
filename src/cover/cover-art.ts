@@ -1,5 +1,7 @@
+import { rgbToOklch, type Oklch } from '../render/color/oklch.ts';
+
 /**
- * Загрузка обложки и извлечение из неё доминирующего цвета для палитры.
+ * Загрузка обложки и извлечение из неё доминантных цветов для палитры.
  * Всё best-effort: если CORS не дал прочитать пиксели, просто остаёмся
  * без цвета — фон и палитра работают и без обложки.
  */
@@ -7,13 +9,19 @@
 export interface CoverArt {
   url: string;
   image: HTMLImageElement | null;
-  /** Доминирующий оттенок в градусах, null — прочитать не удалось. */
-  hue: number | null;
-  saturation: number | null;
+  /**
+   * Два-три доминантных цвета обложки в OKLCH, от самого весомого к менее.
+   * Пустой массив — пиксели прочитать не удалось (CORS) или цвета в обложке нет.
+   */
+  colors: Oklch[];
 }
 
-const EMPTY: CoverArt = { url: '', image: null, hue: null, saturation: null };
+const EMPTY: CoverArt = { url: '', image: null, colors: [] };
 const SAMPLE_SIZE = 48;
+/** Сколько доминантных цветов вытаскиваем: больше трёх палитре уже не нужно. */
+const MAX_COLORS = 3;
+/** Соседние по оттенку кластеры — это один и тот же цвет, схлопываем. */
+const MERGE_DEGREES = 35;
 
 export class CoverArtLoader {
   private current: CoverArt = EMPTY;
@@ -36,11 +44,10 @@ export class CoverArtLoader {
     try {
       const image = await loadImage(url);
       if (this.pendingUrl !== url) return; // трек успел смениться
-      const dominant = extractDominant(image);
-      this.current = { url, image, hue: dominant?.hue ?? null, saturation: dominant?.saturation ?? null };
+      this.current = { url, image, colors: extractDominant(image) };
     } catch {
       if (this.pendingUrl !== url) return;
-      this.current = { url, image: null, hue: null, saturation: null };
+      this.current = { url, image: null, colors: [] };
     } finally {
       if (this.pendingUrl === url) this.pendingUrl = null;
     }
@@ -59,65 +66,71 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 }
 
 /**
- * Гистограмма по оттенкам, взвешенная насыщенностью: серые пиксели почти
- * не влияют, иначе доминирующим цветом почти всегда оказывается фон обложки.
+ * Гистограмма по оттенкам прямо в OKLCH, взвешенная хромой.
+ *
+ * Взвешивание нужно, чтобы серый фон обложки не побеждал по площади: почти
+ * ахроматические пиксели почти не голосуют. Считается один раз на трек.
  */
-function extractDominant(image: HTMLImageElement): { hue: number; saturation: number } | null {
+function extractDominant(image: HTMLImageElement): Oklch[] {
   const canvas = document.createElement('canvas');
   canvas.width = SAMPLE_SIZE;
   canvas.height = SAMPLE_SIZE;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return null;
+  if (!ctx) return [];
 
   ctx.drawImage(image, 0, 0, SAMPLE_SIZE, SAMPLE_SIZE);
   let data: Uint8ClampedArray;
   try {
     data = ctx.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE).data;
   } catch {
-    return null; // canvas tainted — обложка без CORS-заголовков
+    return []; // canvas tainted — обложка без CORS-заголовков
   }
 
-  const buckets = new Float64Array(36);
-  const saturations = new Float64Array(36);
+  const BUCKETS = 36;
+  const weight = new Float64Array(BUCKETS);
+  const sumL = new Float64Array(BUCKETS);
+  const sumC = new Float64Array(BUCKETS);
+  const sumSin = new Float64Array(BUCKETS);
+  const sumCos = new Float64Array(BUCKETS);
+
   for (let i = 0; i < data.length; i += 4) {
-    const [hue, saturation, lightness] = rgbToHsl(data[i], data[i + 1], data[i + 2]);
-    if (lightness < 0.12 || lightness > 0.94) continue; // почти чёрное и почти белое цвета не несут
-    const bucket = Math.min(35, Math.floor(hue / 10));
-    const weight = saturation * saturation;
-    buckets[bucket] += weight;
-    saturations[bucket] += saturation * weight;
+    const color = rgbToOklch(data[i], data[i + 1], data[i + 2]);
+    if (color.l < 0.12 || color.l > 0.96) continue; // почти чёрное и почти белое ничего не говорят
+    const bucket = Math.min(BUCKETS - 1, Math.floor((color.h / 360) * BUCKETS));
+    const vote = color.c * color.c;
+    weight[bucket] += vote;
+    sumL[bucket] += color.l * vote;
+    sumC[bucket] += color.c * vote;
+    // Оттенок усредняем через синус и косинус: среднее 350° и 10° — это 0°, а не 180°.
+    const radians = (color.h * Math.PI) / 180;
+    sumSin[bucket] += Math.sin(radians) * vote;
+    sumCos[bucket] += Math.cos(radians) * vote;
   }
 
-  let bestBucket = -1;
-  let bestWeight = 0;
-  for (let i = 0; i < buckets.length; i++) {
-    if (buckets[i] > bestWeight) {
-      bestWeight = buckets[i];
-      bestBucket = i;
-    }
+  const candidates: Array<{ color: Oklch; weight: number }> = [];
+  for (let i = 0; i < BUCKETS; i++) {
+    if (weight[i] < 0.5) continue;
+    candidates.push({
+      weight: weight[i],
+      color: {
+        l: sumL[i] / weight[i],
+        c: sumC[i] / weight[i],
+        h: ((Math.atan2(sumSin[i], sumCos[i]) * 180) / Math.PI + 360) % 360,
+      },
+    });
   }
-  if (bestBucket < 0 || bestWeight < 1) return null;
+  candidates.sort((a, b) => b.weight - a.weight);
 
-  return {
-    hue: bestBucket * 10 + 5,
-    saturation: Math.min(100, (saturations[bestBucket] / bestWeight) * 100),
-  };
+  const picked: Oklch[] = [];
+  for (const candidate of candidates) {
+    if (picked.length >= MAX_COLORS) break;
+    const tooClose = picked.some((chosen) => hueDistance(chosen.h, candidate.color.h) < MERGE_DEGREES);
+    if (!tooClose) picked.push(candidate.color);
+  }
+  return picked;
 }
 
-function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
-  const rn = r / 255;
-  const gn = g / 255;
-  const bn = b / 255;
-  const max = Math.max(rn, gn, bn);
-  const min = Math.min(rn, gn, bn);
-  const lightness = (max + min) / 2;
-  const delta = max - min;
-  if (delta === 0) return [0, 0, lightness];
-
-  const saturation = lightness > 0.5 ? delta / (2 - max - min) : delta / (max + min);
-  let hue: number;
-  if (max === rn) hue = ((gn - bn) / delta + (gn < bn ? 6 : 0)) / 6;
-  else if (max === gn) hue = ((bn - rn) / delta + 2) / 6;
-  else hue = ((rn - gn) / delta + 4) / 6;
-  return [hue * 360, saturation, lightness];
+function hueDistance(a: number, b: number): number {
+  const diff = Math.abs(a - b) % 360;
+  return diff > 180 ? 360 - diff : diff;
 }

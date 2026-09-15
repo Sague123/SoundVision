@@ -3,7 +3,7 @@
  * анализатор и рендер, — поэтому всё применяется со следующего кадра.
  */
 
-import { COLOR_SCHEMES } from '../render/palette.ts';
+import { HARMONY_SCHEMES } from '../render/palette.ts';
 import { ALL_PRIMITIVE_IDS, PRIMITIVE_LABELS, type PrimitiveId } from '../render/primitives/types.ts';
 import { MAX_SAFE_FLASH_HZ, PRESET_PROFILES, type Settings } from '../settings.ts';
 import {
@@ -22,6 +22,8 @@ export interface PanelStatus {
   lyrics: string;
   primitives: string;
   seed: string;
+  substance: string;
+  harmony: string;
 }
 
 export interface SettingsPanelHandlers {
@@ -83,6 +85,8 @@ export class SettingsPanel {
       ['BPM', status.bpm.toFixed(1)],
       ['Тональность', status.key],
       ['Секция', status.section],
+      ['Вещество', status.substance],
+      ['Гармония', status.harmony],
       ['Примитивы', status.primitives || '—'],
       ['Seed', status.seed],
       ['Источник', status.source],
@@ -204,46 +208,64 @@ export class SettingsPanel {
 
     this.body.append(section(
       'Палитра',
+      note('Оттенок берётся от тоники по квинтовому кругу, температура — от лада. '
+        + 'Схема задаёт, как от этого оттенка строится остальная палитра.'),
       this.track(select({
-        label: 'Схема',
-        options: COLOR_SCHEMES.map((scheme) => ({ value: scheme.id, label: scheme.name })),
-        get: () => s.palette.schemeId,
-        set: (v) => { s.palette.schemeId = v; },
+        label: 'Гармония',
+        options: [
+          { value: 'auto', label: 'Авто (от seed трека)' },
+          ...HARMONY_SCHEMES.map((scheme) => ({ value: scheme.id, label: scheme.name })),
+        ],
+        get: () => s.palette.harmonyId,
+        set: (v) => { s.palette.harmonyId = v; },
       })),
+      this.track(slider({
+        label: 'Сдвиг оттенка', min: -180, max: 180, step: 1,
+        get: () => s.palette.tuning.hueOffset,
+        set: (v) => { s.palette.tuning.hueOffset = v; },
+        format: (v) => `${v.toFixed(0)}°`,
+      })),
+      this.track(slider({
+        label: 'Хрома', min: 0, max: 2, step: 0.05,
+        get: () => s.palette.tuning.chromaBoost,
+        set: (v) => { s.palette.tuning.chromaBoost = v; },
+        format: (v) => `${Math.round(v * 100)}%`,
+      })),
+      this.track(slider({
+        label: 'Светлота форм', min: 0.5, max: 1.5, step: 0.02,
+        get: () => s.palette.tuning.lightnessBoost,
+        set: (v) => { s.palette.tuning.lightnessBoost = v; },
+        format: (v) => `${Math.round(v * 100)}%`,
+      })),
+      this.track(slider({
+        label: 'Температура лада', min: 0, max: 1, step: 0.02,
+        get: () => s.palette.tuning.temperature,
+        set: (v) => { s.palette.tuning.temperature = v; },
+        format: (v) => `${Math.round(v * 100)}%`,
+      })),
+      this.track(slider({
+        label: 'Якорь обложки', min: 0, max: 1, step: 0.02,
+        get: () => s.palette.tuning.coverWeight,
+        set: (v) => { s.palette.tuning.coverWeight = v; },
+        format: (v) => `${Math.round(v * 100)}%`,
+      })),
+    ));
+
+    this.body.append(section(
+      'Камера',
+      note('Наблюдатель внутри сцены: дрейф, орбита в темпе, наезд на билд-апе и крен. '
+        + 'Удар даёт камере толчок.'),
       this.track(toggle({
-        label: 'Своя палитра',
-        get: () => s.palette.useCustom,
-        set: (v) => { s.palette.useCustom = v; },
+        label: 'Движение камеры',
+        get: () => s.camera.enabled,
+        set: (v) => { s.camera.enabled = v; },
       })),
-      ...(['major', 'minor'] as const).flatMap((mode) => {
-        const label = mode === 'major' ? 'Мажор' : 'Минор';
-        return [
-          this.track(slider({
-            label: `${label}: оттенок`, min: 0, max: 360, step: 1,
-            get: () => s.palette.custom[mode].hue,
-            set: (v) => { s.palette.custom[mode].hue = v; },
-            format: (v) => `${v.toFixed(0)}°`,
-          })),
-          this.track(slider({
-            label: `${label}: разброс`, min: 0, max: 180, step: 1,
-            get: () => s.palette.custom[mode].spread,
-            set: (v) => { s.palette.custom[mode].spread = v; },
-            format: (v) => `${v.toFixed(0)}°`,
-          })),
-          this.track(slider({
-            label: `${label}: насыщенность`, min: 0, max: 100, step: 1,
-            get: () => s.palette.custom[mode].saturation,
-            set: (v) => { s.palette.custom[mode].saturation = v; },
-            format: (v) => `${v.toFixed(0)}%`,
-          })),
-          this.track(slider({
-            label: `${label}: светлота`, min: 10, max: 80, step: 1,
-            get: () => s.palette.custom[mode].lightness,
-            set: (v) => { s.palette.custom[mode].lightness = v; },
-            format: (v) => `${v.toFixed(0)}%`,
-          })),
-        ];
-      }),
+      this.track(slider({
+        label: 'Амплитуда', min: 0, max: 1, step: 0.02,
+        get: () => s.camera.amount,
+        set: (v) => { s.camera.amount = v; },
+        format: (v) => `${Math.round(v * 100)}%`,
+      })),
     ));
 
     this.body.append(section(

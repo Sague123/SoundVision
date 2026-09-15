@@ -121,7 +121,7 @@ function frame(timestamp: number): void {
 
   try {
     const stats = compositor.render(synthesize(timestamp, stage.section), settings, {
-      url: '', image: null, hue: null, saturation: null,
+      url: '', image: null, colors: [],
     });
     frameMsTotal += stats.frameMs;
     for (const id of stats.activePrimitives) renderedInStage.add(id);

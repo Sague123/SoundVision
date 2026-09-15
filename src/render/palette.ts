@@ -1,190 +1,258 @@
 /**
- * Палитра строится непрерывно: схема (мажор/минор) + сдвиг от seed'а трека +
- * живая модуляция от mood vector. Никаких «переключений темы» — только дрейф.
+ * Палитра в OKLCH.
+ *
+ * Всё строится от музыки: оттенок — от тоники по квинтовому кругу, температура —
+ * от лада, хрома — от яркости тембра, светлота — от энергии (через контраст
+ * фона и форм, а не общую яркость), ширина схемы — от секции.
+ *
+ * Движок держит состояние между кадрами: смена тональности или секции не
+ * применяется мгновенно, а мигрирует за ~1.5 секунды. Плюс «дыхание» —
+ * медленная осцилляция хромы и светлоты в темпе трека.
  */
 
-import type { MoodVector } from '../audio/mood-vector.ts';
 import { clamp, clamp01 } from '../audio/features.ts';
+import type { MoodVector } from '../audio/mood-vector.ts';
+import type { CoverArt } from '../cover/cover-art.ts';
+import {
+  chromaScaleAt, complementOf, hueOffsetAt, spreadForSection,
+  applyTemperature, tonicHue, type HarmonyScheme,
+} from './color/harmony.ts';
+import {
+  mixHue, mixOklch, normalizeHue, oklchToRgb, rgbToCss, rgbToCssAlpha,
+  type Oklch, type Rgb,
+} from './color/oklch.ts';
 
-export interface PaletteSpec {
-  /** Базовый оттенок, градусы 0..360. */
-  hue: number;
-  /** Разброс оттенков между акцентами, градусы. */
-  spread: number;
-  saturation: number;
-  lightness: number;
-}
-
-export interface ColorScheme {
-  id: string;
-  name: string;
-  major: PaletteSpec;
-  minor: PaletteSpec;
-}
-
-export const COLOR_SCHEMES: ColorScheme[] = [
-  {
-    id: 'aurora',
-    name: 'Aurora',
-    major: { hue: 160, spread: 80, saturation: 72, lightness: 58 },
-    minor: { hue: 222, spread: 70, saturation: 64, lightness: 46 },
-  },
-  {
-    id: 'ember',
-    name: 'Ember',
-    major: { hue: 36, spread: 60, saturation: 84, lightness: 56 },
-    minor: { hue: 352, spread: 48, saturation: 66, lightness: 40 },
-  },
-  {
-    id: 'neon',
-    name: 'Neon',
-    major: { hue: 300, spread: 120, saturation: 92, lightness: 60 },
-    minor: { hue: 258, spread: 96, saturation: 80, lightness: 46 },
-  },
-  {
-    id: 'tide',
-    name: 'Tide',
-    major: { hue: 190, spread: 64, saturation: 70, lightness: 56 },
-    minor: { hue: 210, spread: 44, saturation: 44, lightness: 38 },
-  },
-  {
-    id: 'mono',
-    name: 'Mono',
-    major: { hue: 45, spread: 20, saturation: 14, lightness: 66 },
-    minor: { hue: 230, spread: 18, saturation: 12, lightness: 44 },
-  },
-];
+export { HARMONY_SCHEMES, findHarmony, type HarmonyScheme } from './color/harmony.ts';
 
 export const ACCENT_COUNT = 6;
+/** Размер таблицы предпосчитанных цветов: accent() зовут сотни раз за кадр. */
+const LUT_SIZE = 64;
+/** Постоянная времени миграции палитры: ~95% перехода за 1.4 секунды. */
+const MIGRATION_TAU = 0.47;
 
 export interface Palette {
-  bgTop: string;
-  bgBottom: string;
-  accents: string[];
-  ink: string;
-  hue: number;
   /** Непрерывная выборка по палитре, t 0..1 (заворачивается по кругу). */
   accent(t: number): string;
-  /** То же, но с альфой — для аддитивных заливок. */
+  /** То же с альфой — для аддитивных заливок. */
   accentAlpha(t: number, alpha: number): string;
+  /** То же числами: примитивы, пишущие в ImageData, не должны парсить строки. */
+  accentRgb(t: number): Rgb;
+  accents: string[];
+  bgTop: string;
+  bgBottom: string;
+  /** Цвет текста песни. */
+  ink: string;
+  /** Текущий базовый оттенок — им же красится свет сцены. */
+  hue: number;
+  /** Комплементарный оттенок: цветовое эхо удара. */
+  echoHue: number;
+  /** Цвет эха заданной силы. */
+  echo(strength: number, alpha: number): string;
+}
+
+export interface PaletteTuning {
+  /** Ручной сдвиг всей палитры по кругу, градусы. */
+  hueOffset: number;
+  /** Множитель хромы, 0..2. */
+  chromaBoost: number;
+  /** Множитель светлоты форм, 0.5..1.5. */
+  lightnessBoost: number;
+  /** Сила температурного сдвига лада, 0..1. */
+  temperature: number;
+  /** Вес якоря обложки, 0..1. */
+  coverWeight: number;
+}
+
+export function defaultTuning(): PaletteTuning {
+  return { hueOffset: 0, chromaBoost: 1, lightnessBoost: 1, temperature: 0.18, coverWeight: 0.4 };
 }
 
 export interface PaletteInput {
-  scheme: ColorScheme;
   mood: MoodVector;
-  /** Сдвиг оттенка от seed'а трека. */
-  hueShift: number;
-  /** Доминирующие оттенки обложки, если включено использование обложки. */
-  coverHue: number | null;
-  coverSaturation: number | null;
+  tuning: PaletteTuning;
+  /** Гармоническая схема; выбирается seed'ом трека. */
+  harmony: HarmonyScheme;
+  /** Небольшой сдвиг оттенка от seed'а — два трека в одной тональности не совпадают. */
+  seedHueShift: number;
+  cover: CoverArt;
+  /** Учитывать ли цвета обложки. */
+  useCover: boolean;
 }
 
-export function buildPalette(input: PaletteInput): Palette {
-  const { scheme, mood, hueShift } = input;
-  const spec = mood.key.mode === 'major' ? scheme.major : scheme.minor;
+/** Плавно едущее скалярное значение — основа миграции палитры. */
+class Drift {
+  private value: number | null = null;
 
-  // Обложка перетягивает оттенок тем сильнее, чем меньше мы уверены в тональности.
-  const coverWeight = input.coverHue === null ? 0 : 0.45 + (1 - mood.key.confidence) * 0.25;
-  const baseHue = input.coverHue === null
-    ? spec.hue + hueShift
-    : mixHue(spec.hue + hueShift, input.coverHue, coverWeight);
+  update(target: number, k: number): number {
+    this.value = this.value === null ? target : this.value + (target - this.value) * k;
+    return this.value;
+  }
+}
 
-  // Яркий тембр уводит оттенок вперёд по кругу, энергия поднимает насыщенность.
-  const hue = baseHue + (mood.brightness - 0.4) * 34 + mood.energySlope * 12;
-  const saturation = clamp(8, 100,
-    (input.coverSaturation ?? spec.saturation) * (0.82 + mood.energy * 0.4) + mood.flux * 10);
-  const lightness = clamp(8, 82, spec.lightness * (0.72 + mood.energy * 0.5));
+/** То же для оттенка: по кратчайшей дуге, иначе смена тоники крутит полный круг. */
+class HueDrift {
+  private value: number | null = null;
 
-  const sectionLift = mood.section === 'drop' ? 1.18 : mood.section === 'calm' ? 0.72 : 1;
+  update(target: number, k: number): number {
+    this.value = this.value === null ? target : mixHue(this.value, target, k);
+    return this.value;
+  }
+}
 
-  const accents: string[] = [];
-  for (let i = 0; i < ACCENT_COUNT; i++) {
-    const t = i / (ACCENT_COUNT - 1);
-    accents.push(hsl(
-      hue + (t - 0.5) * spec.spread,
-      clamp(6, 100, saturation * (0.85 + t * 0.3)),
-      clamp(10, 92, lightness * sectionLift * (0.7 + t * 0.65)),
-    ));
+export class PaletteEngine {
+  private readonly hue = new HueDrift();
+  private readonly chroma = new Drift();
+  private readonly lightness = new Drift();
+  private readonly bgLightness = new Drift();
+  private readonly spread = new Drift();
+  private readonly coverHue = new HueDrift();
+  private readonly coverAmount = new Drift();
+
+  /** Музыкальные часы: такт и фраза. Их не восстановить из beatPhase, он вертится. */
+  private barPhase = 0;
+  private phrasePhase = 0;
+
+  build(input: PaletteInput): Palette {
+    const { mood, tuning, harmony } = input;
+    const dt = Math.min(0.1, mood.deltaMs / 1000);
+    const k = 1 - Math.exp(-dt / MIGRATION_TAU);
+
+    this.advanceClock(dt, mood.bpm);
+
+    // --- оттенок: тоника по квинтовому кругу + температура лада ---
+    const fromTonic = tonicHue(mood.key.tonic) + input.seedHueShift + tuning.hueOffset;
+    const tempered = applyTemperature(fromTonic, mood.key.mode, tuning.temperature * mood.key.confidence);
+
+    // --- якорь обложки ---
+    const coverColors = input.useCover ? input.cover.colors : [];
+    const anchor = coverColors[0] ?? null;
+    // Чем меньше уверенность в тональности, тем охотнее слушаем обложку.
+    const anchorTarget = anchor ? tuning.coverWeight * (0.6 + (1 - mood.key.confidence) * 0.4) : 0;
+    const coverAmount = this.coverAmount.update(anchorTarget, k);
+    const coverHue = this.coverHue.update(anchor?.h ?? tempered, k);
+    const baseHue = normalizeHue(this.hue.update(mixHue(tempered, coverHue, anchorTarget * 0.7), k));
+
+    // --- хрома от яркости тембра, светлота от энергии ---
+    const breathChroma = 1 + Math.sin(this.barPhase * Math.PI * 2) * 0.07;
+    const breathLight = Math.sin(this.phrasePhase * Math.PI * 2) * 0.025;
+
+    const chromaTarget = (0.035 + mood.brightness * 0.15 + mood.flux * 0.02) * tuning.chromaBoost;
+    const chroma = clamp(0.004, 0.33, this.chroma.update(chromaTarget, k) * breathChroma);
+
+    // Энергия разводит фон и формы: формы светлее, фон темнее. Это контраст,
+    // а не «сделать всё ярче» — иначе на дропе кадр просто выцветает.
+    const formTarget = (0.5 + mood.energy * 0.3) * tuning.lightnessBoost;
+    const formLightness = clamp(0.12, 0.95, this.lightness.update(formTarget, k) + breathLight);
+    const bgTarget = 0.14 - mood.energy * 0.06 + (mood.section === 'calm' ? 0.03 : 0);
+    const backgroundLightness = clamp(0.03, 0.3, this.bgLightness.update(bgTarget, k));
+
+    const spread = this.spread.update(spreadForSection(mood.section), k);
+
+    return this.assemble({
+      harmony, baseHue, chroma, formLightness, backgroundLightness, spread,
+      coverColors, coverAmount,
+    });
   }
 
-  const bgLightness = clamp(2, 26, 4 + mood.energy * 10 + (mood.section === 'calm' ? 2 : 0));
-  const bgTop = hsl(hue - spec.spread * 0.3, clamp(6, 70, saturation * 0.5), bgLightness);
-  const bgBottom = hsl(hue + spec.spread * 0.35, clamp(6, 70, saturation * 0.35), bgLightness * 0.45);
-  const ink = hsl(hue + 180, clamp(0, 30, saturation * 0.25), 94);
+  /**
+   * Такт — четыре доли, фраза — четыре такта. Дыхание палитры идёт по ним,
+   * а не по каждому биту: на бите это читалось бы как мигание.
+   */
+  private advanceClock(dt: number, bpm: number): void {
+    const beatsPerSecond = Math.max(0.5, bpm) / 60;
+    this.barPhase = (this.barPhase + (dt * beatsPerSecond) / 4) % 1;
+    this.phrasePhase = (this.phrasePhase + (dt * beatsPerSecond) / 16) % 1;
+  }
 
-  const sample = (t: number): [number, number, number] => {
-    const wrapped = ((t % 1) + 1) % 1;
-    return [
-      hue + (wrapped - 0.5) * spec.spread,
-      clamp(6, 100, saturation * (0.85 + wrapped * 0.3)),
-      clamp(10, 92, lightness * sectionLift * (0.7 + wrapped * 0.65)),
-    ];
-  };
+  private assemble(input: {
+    harmony: HarmonyScheme;
+    baseHue: number;
+    chroma: number;
+    formLightness: number;
+    backgroundLightness: number;
+    spread: number;
+    coverColors: Oklch[];
+    coverAmount: number;
+  }): Palette {
+    const { harmony, baseHue, chroma, formLightness, backgroundLightness, spread } = input;
 
-  return {
-    bgTop,
-    bgBottom,
-    accents,
-    ink,
-    hue,
-    accent(t) {
-      const [h, s, l] = sample(t);
-      return hsl(h, s, l);
-    },
-    accentAlpha(t, alpha) {
-      const [h, s, l] = sample(t);
-      return `hsl(${normalizeHue(h).toFixed(1)} ${s.toFixed(1)}% ${l.toFixed(1)}% / ${clamp01(alpha).toFixed(3)})`;
-    },
-  };
-}
+    const sample = (t: number): Oklch => {
+      const wrapped = ((t % 1) + 1) % 1;
+      const generated: Oklch = {
+        l: clamp(0.08, 0.97, formLightness * (0.66 + wrapped * 0.6)),
+        c: chroma * chromaScaleAt(harmony, wrapped),
+        h: baseHue + hueOffsetAt(harmony, wrapped, spread),
+      };
+      return blendCover(generated, input.coverColors, input.coverAmount, wrapped);
+    };
 
-export function hsl(h: number, s: number, l: number): string {
-  return `hsl(${normalizeHue(h).toFixed(1)} ${s.toFixed(1)}% ${l.toFixed(1)}%)`;
-}
+    // Таблица цветов на кадр: дальше accent() — это просто индексация.
+    const lutRgb: Rgb[] = new Array(LUT_SIZE);
+    const lutCss: string[] = new Array(LUT_SIZE);
+    for (let i = 0; i < LUT_SIZE; i++) {
+      lutRgb[i] = oklchToRgb(sample(i / (LUT_SIZE - 1)));
+      lutCss[i] = rgbToCss(lutRgb[i]);
+    }
+    const indexOf = (t: number): number => {
+      const wrapped = ((t % 1) + 1) % 1;
+      return Math.min(LUT_SIZE - 1, Math.round(wrapped * (LUT_SIZE - 1)));
+    };
 
-function normalizeHue(h: number): number {
-  return ((h % 360) + 360) % 360;
-}
+    const accents: string[] = [];
+    for (let i = 0; i < ACCENT_COUNT; i++) accents.push(lutCss[indexOf(i / (ACCENT_COUNT - 1))]);
 
-/** Смешивание по кратчайшей дуге — иначе переход через 0° делает полный оборот. */
-function mixHue(a: number, b: number, t: number): number {
-  const diff = ((((b - a) % 360) + 540) % 360) - 180;
-  return a + diff * clamp01(t);
-}
+    const bgTop = rgbToCss(oklchToRgb({
+      l: backgroundLightness,
+      c: chroma * 0.42,
+      h: baseHue + hueOffsetAt(harmony, 0.15, spread) * 0.5,
+    }));
+    const bgBottom = rgbToCss(oklchToRgb({
+      l: backgroundLightness * 0.55,
+      c: chroma * 0.3,
+      h: baseHue + hueOffsetAt(harmony, 0.85, spread) * 0.5,
+    }));
+    // Текст должен читаться поверх любой картинки: высокая светлота, низкая хрома.
+    const ink = rgbToCss(oklchToRgb({ l: 0.96, c: Math.min(0.04, chroma * 0.3), h: baseHue }));
 
-export function findScheme(id: string): ColorScheme {
-  return COLOR_SCHEMES.find((scheme) => scheme.id === id) ?? COLOR_SCHEMES[0];
+    const echoHue = complementOf(baseHue);
+
+    return {
+      accent: (t) => lutCss[indexOf(t)],
+      accentRgb: (t) => lutRgb[indexOf(t)],
+      accentAlpha: (t, alpha) => rgbToCssAlpha(lutRgb[indexOf(t)], alpha),
+      accents,
+      bgTop,
+      bgBottom,
+      ink,
+      hue: baseHue,
+      echoHue,
+      echo: (strength, alpha) => rgbToCssAlpha(
+        oklchToRgb({
+          l: clamp(0.3, 0.95, formLightness * (1 + strength * 0.5)),
+          c: clamp(0.02, 0.33, chroma * (1 + strength)),
+          h: echoHue,
+        }),
+        alpha,
+      ),
+    };
+  }
 }
 
 /**
- * Разбор строки `hsl(h s% l%)` в RGB 0..255.
- * Нужен примитивам, которые пишут прямо в ImageData: там цвет нужен числами.
+ * Подмешивание доминантных цветов обложки. Точка t выбирает, к какому из
+ * двух-трёх цветов тянуться, поэтому обложка задаёт характер всей палитры,
+ * а не только базового оттенка.
  */
-export function parseHsl(color: string): [number, number, number] {
-  const match = /hsl\(([\d.]+) ([\d.]+)% ([\d.]+)%\)/.exec(color);
-  if (!match) return [255, 255, 255];
-  const h = Number(match[1]) / 360;
-  const s = Number(match[2]) / 100;
-  const l = Number(match[3]) / 100;
-  if (s === 0) {
-    const value = Math.round(l * 255);
-    return [value, value, value];
-  }
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-  const p = 2 * l - q;
-  return [
-    Math.round(hueToChannel(p, q, h + 1 / 3) * 255),
-    Math.round(hueToChannel(p, q, h) * 255),
-    Math.round(hueToChannel(p, q, h - 1 / 3) * 255),
-  ];
-}
+function blendCover(generated: Oklch, colors: Oklch[], amount: number, t: number): Oklch {
+  if (colors.length === 0 || amount <= 0.001) return generated;
 
-function hueToChannel(p: number, q: number, t: number): number {
-  let x = t;
-  if (x < 0) x += 1;
-  if (x > 1) x -= 1;
-  if (x < 1 / 6) return p + (q - p) * 6 * x;
-  if (x < 1 / 2) return q;
-  if (x < 2 / 3) return p + (q - p) * (2 / 3 - x) * 6;
-  return p;
+  const position = t * (colors.length - 1);
+  const index = Math.min(colors.length - 2, Math.floor(position));
+  const target = colors.length === 1
+    ? colors[0]
+    : mixOklch(colors[index], colors[index + 1], position - index);
+
+  // Светлоту обложки берём лишь частично: она задана печатью, а не музыкой.
+  const anchored = mixOklch(generated, target, clamp01(amount));
+  return { l: generated.l * 0.75 + anchored.l * 0.25, c: anchored.c, h: anchored.h };
 }
