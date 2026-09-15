@@ -42,7 +42,7 @@ export class BaseLayer {
     for (const primitive of this.primitives.values()) primitive.reseed(seed);
   }
 
-  render(frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight'>, state: GeneratorState, settings: Settings, cover: CoverArt): void {
+  render(frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight' | 'tuning'>, state: GeneratorState, settings: Settings, cover: CoverArt): void {
     const { palette, mood, scene } = frame;
     const ctx = this.ctx;
 
@@ -79,6 +79,7 @@ export class BaseLayer {
         ...frame,
         ctx,
         params: state.baseParams,
+        tuning: state.tunings.get(state.baseId) ?? {},
         weight: state.baseWeight,
       });
     }

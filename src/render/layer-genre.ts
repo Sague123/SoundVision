@@ -7,6 +7,7 @@ import { clamp01 } from '../audio/features.ts';
 import { createPrimitive } from './generator.ts';
 import type { GeneratorState } from './generator.ts';
 import type { DrawPrimitive, ModifierPrimitive, PrimitiveId, RenderFrame } from './primitives/types.ts';
+import type { Tuning } from './primitives/tuning.ts';
 import { ALL_PRIMITIVE_IDS } from './primitives/types.ts';
 import type { GeneratorSeed } from './seed.ts';
 import { RaymarchPrimitive } from './primitives/raymarch.ts';
@@ -77,12 +78,19 @@ export class GenreLayer {
   }
 
   /** @returns примитивы, реально нарисованные в этом кадре — для дебаг-оверлея. */
-  render(frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight'>, state: GeneratorState): PrimitiveId[] {
+  render(
+    frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight' | 'tuning'>,
+    state: GeneratorState,
+    trails: number,
+  ): PrimitiveId[] {
     const ctx = this.contentCtx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 
     // destination-out гасит старое, не подмешивая цвет: слой остаётся прозрачным.
-    const fadeRate = 0.8 + (1 - state.genreParams.trail) * 28;
+    // Ползунок следов нормируем на умолчание, чтобы на месте по умолчанию он
+    // ничего не менял.
+    const trailAmount = clamp01(state.genreParams.trail * (trails / 0.35));
+    const fadeRate = 0.8 + (1 - trailAmount) * 28;
     const fade = clamp01(1 - Math.exp(-(frame.dtMs / 1000) * fadeRate));
     ctx.globalCompositeOperation = 'destination-out';
     ctx.globalAlpha = 1;
@@ -95,7 +103,7 @@ export class GenreLayer {
       const weight = state.weights.get(id) ?? 0;
       if (weight < MIN_VISIBLE_WEIGHT) continue;
       if (primitive instanceof RaymarchPrimitive && !primitive.available) continue;
-      primitive.draw({ ...frame, ctx, params: state.genreParams, weight });
+      primitive.draw({ ...frame, ctx, params: state.genreParams, tuning: tuningOf(state, id), weight });
       active.push(id);
     }
 
@@ -106,7 +114,13 @@ export class GenreLayer {
       this.outputCtx.globalCompositeOperation = 'source-over';
       this.outputCtx.globalAlpha = 1;
       kaleidoscope.apply(
-        { ...frame, ctx: this.outputCtx, params: state.genreParams, weight: clamp01(state.kaleidoscopeWeight) },
+        {
+          ...frame,
+          ctx: this.outputCtx,
+          params: state.genreParams,
+          tuning: tuningOf(state, 'kaleidoscope'),
+          weight: clamp01(state.kaleidoscopeWeight),
+        },
         this.content,
       );
       active.push('kaleidoscope');
@@ -120,4 +134,9 @@ export class GenreLayer {
     this.drawables.clear();
     this.modifiers.clear();
   }
+}
+
+/** Параметры примитива из состояния генератора; там они всегда заполнены. */
+function tuningOf(state: GeneratorState, id: PrimitiveId): Tuning {
+  return state.tunings.get(id) ?? {};
 }

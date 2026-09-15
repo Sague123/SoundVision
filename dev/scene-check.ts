@@ -17,7 +17,12 @@ import {
   Scene, classifyImpulse, defaultSceneConfig, type ImpulseKind,
 } from '../src/render/scene.ts';
 import { PostPass } from '../src/render/post-pass.ts';
-import { defaultSettings } from '../src/settings.ts';
+import {
+  MAX_SAFE_FLASH_HZ, PRESET_PROFILES, defaultSettings, mergeSettings,
+} from '../src/settings.ts';
+import { ALL_PRIMITIVE_IDS } from '../src/render/primitives/types.ts';
+import { PRIMITIVE_PARAMS, resolvePrimitiveParams } from '../src/render/primitives/tuning.ts';
+import { exportPresets } from '../src/ui/presets.ts';
 import { makeSeed } from '../src/render/seed.ts';
 import type { NoteName } from '../src/audio/chroma.ts';
 import type { BandProfile } from '../src/audio/features.ts';
@@ -184,6 +189,13 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
 
 // --- 5. Вещество выбирает примитивы -----------------------------------------
 {
+  // Порядок примитивов по оси вещества: от тумана к плазме.
+  const SUBSTANCE_ORDER = [
+    'flow-field', 'waveform-terrain', 'l-system', 'wave-mesh', 'metaballs',
+    'radial-waveform', 'oscilloscope', 'voronoi', 'cellular', 'kaleidoscope',
+    'spectrum', 'raymarch',
+  ];
+
   // Нужен seed, в пуле которого есть и «туманный», и «плазменный» примитив.
   let salt = 0;
   let seed = makeSeed('проверка оси', salt);
@@ -191,9 +203,13 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
     seed = makeSeed('проверка оси', ++salt);
   }
 
+  /**
+   * Соло меняется только на границе секции и не чаще, чем раз в 22 секунды,
+   * поэтому прогон обязан содержать смены секции — иначе соло так и останется
+   * тем, с которым генератор стартовал.
+   */
   const leaderFor = (quiet: boolean): string => {
     const generator = new Generator('проверка оси');
-    // Reshuffle до того же пула, что нашли выше.
     for (let i = 0; i < salt; i++) generator.reshuffle();
 
     const scene = new Scene();
@@ -201,21 +217,25 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
     const settings = defaultSettings();
     settings.generator.mode = 'auto';
 
-    let weights = new Map<string, number>();
-    for (let frame = 0; frame < 900; frame++) {
-      const mood = moodAt(frame * FRAME_MS, quiet
-        ? { noisiness: 0.02, brightness: 0.05, energy: 0.12, section: 'calm' }
-        : { noisiness: 0.95, brightness: 0.9, energy: 0.9, section: 'drop' });
-      const state = generator.update(mood, settings, scene.update(mood, SCENE_CONFIG));
-      weights = state.weights as Map<string, number>;
+    let solo = '';
+    for (let frame = 0; frame < 60 * 200; frame++) {
+      const timeMs = frame * FRAME_MS;
+      // Секция дёргается каждые 25 секунд: даём системе фокуса возможность
+      // сменить соло, но не чаще её собственного лимита.
+      const flip = Math.floor(timeMs / 25_000) % 2 === 1;
+      const mood = moodAt(timeMs, quiet
+        ? { noisiness: 0.02, brightness: 0.05, energy: 0.12, section: flip ? 'calm' : 'steady' }
+        : { noisiness: 0.95, brightness: 0.9, energy: 0.9, section: flip ? 'drop' : 'buildup' });
+      solo = generator.update(mood, settings, scene.update(mood, SCENE_CONFIG)).focus.solo;
     }
-    return [...weights.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    return solo;
   };
 
   const quietLeader = leaderFor(true);
   const loudLeader = leaderFor(false);
-  check('в тишине ведёт «туманный» примитив', quietLeader === 'flow-field', `ведёт ${quietLeader}`);
-  check('на шумном пике ведёт «плазменный»', loudLeader === 'raymarch', `ведёт ${loudLeader}`);
+  check('в тишине соло уходит к «туманному» краю оси',
+    SUBSTANCE_ORDER.indexOf(quietLeader) < SUBSTANCE_ORDER.indexOf(loudLeader),
+    `тишина ${quietLeader}, пик ${loudLeader}`);
 }
 
 // --- 6. Классификация удара по частотному профилю ----------------------------
@@ -326,8 +346,9 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
 // --- 8. Направление тряски от частотного профиля -----------------------------
 {
   /**
-   * Дрейф и орбита камеры детерминированы, а тряска — нет. Поэтому меряем
-   * разницу с прогоном при выключенной тряске: так остаётся только она.
+   * Тряска берёт случайность из отдельного seed-потока, поэтому прогон
+   * воспроизводим. Дрейф и орбита в обоих прогонах одни и те же, так что
+   * разница с выключенной тряской — это ровно она сама.
    */
   const shakeOnly = (profile: BandProfile): { x: number; y: number } => {
     const run = (shake: boolean): { x: number; y: number } => {
@@ -359,12 +380,17 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
 
   const low = shakeOnly({ low: 1, mid: 0.2, high: 0.05 });
   const high = shakeOnly({ low: 0.05, mid: 0.3, high: 1 });
-  const lowRatio = low.y / Math.max(1e-6, low.x);
-  const highRatio = high.y / Math.max(1e-6, high.x);
+  // Сравниваем оси напрямую, а не отношение отношений: у баса горизонтальная
+  // составляющая близка к нулю, и частное от неё скачет на порядки.
   check(
-    'бас трясёт по вертикали, верх — во все стороны',
-    lowRatio > highRatio * 1.5,
-    `низ верт/гор ${lowRatio.toFixed(2)}, верх ${highRatio.toFixed(2)}`,
+    'бас трясёт по вертикали сильнее верха',
+    low.y > high.y * 1.25,
+    `низ ${low.y.toFixed(2)} против верха ${high.y.toFixed(2)}`,
+  );
+  check(
+    'верх трясёт по горизонтали сильнее баса',
+    high.x > low.x * 3,
+    `верх ${high.x.toFixed(2)} против низа ${low.x.toFixed(2)}`,
   );
 }
 
@@ -590,7 +616,10 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
 
     const scene = new Scene();
     scene.reseed(seed);
-    const config = { enabled: true, mode: 'auto' as const, manual: [], density: 0.6 };
+    const config = {
+      enabled: true, mode: 'auto' as const, manual: [], density: 0.6,
+      life: 1, speed: 1, size: 1,
+    };
 
     let debug = { active: [] as string[], count: 0 };
     for (let frame = 0; frame < 600; frame++) {
@@ -622,7 +651,10 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
     particles.reseed(seed, field);
     const scene = new Scene();
     scene.reseed(seed);
-    const config = { enabled: true, mode: 'manual' as const, manual: ['dust' as const], density };
+    const config = {
+      enabled: true, mode: 'manual' as const, manual: ['dust' as const], density,
+      life: 1, speed: 1, size: 1,
+    };
     let count = 0;
     for (let frame = 0; frame < 300; frame++) {
       const mood = moodAt(frame * FRAME_MS, { energy: 0.5, section: 'calm' });
@@ -712,6 +744,146 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
   const calm = motionLoad(0.35);
   check('мастер амплитуды гасит движение камеры', calm < full * 0.75,
     `полная ${full.toFixed(1)}, спокойная ${calm.toFixed(1)}`);
+}
+
+// --- 18. Соло-режим панели ---------------------------------------------------
+{
+  // Соло-режим нужен ровно для подбора параметров: на экране должен остаться
+  // один примитив, иначе настраивать его вслепую.
+  const settings = defaultSettings();
+  settings.generator.solo = 'spectrum';
+
+  const generator = new Generator('соло');
+  const scene = new Scene();
+  scene.reseed(makeSeed('соло'));
+  let state = generator.update(moodAt(0), settings, scene.update(moodAt(0), SCENE_CONFIG));
+  for (let frame = 1; frame < 400; frame++) {
+    const mood = moodAt(frame * FRAME_MS, { energy: 0.6, section: 'steady' });
+    state = generator.update(mood, settings, scene.update(mood, SCENE_CONFIG));
+  }
+
+  const others = [...state.weights.entries()]
+    .filter(([id]) => id !== 'spectrum' && id !== 'kaleidoscope')
+    .reduce((sum, [, weight]) => sum + weight, 0);
+  check('соло-режим оставляет на экране один примитив',
+    (state.weights.get('spectrum') ?? 0) > 0.9 && others < 0.02,
+    `спектр ${(state.weights.get('spectrum') ?? 0).toFixed(2)}, остальные ${others.toFixed(3)}`);
+}
+
+// --- 19. Роль, назначенная вручную, сильнее автоматики ------------------------
+{
+  const settings = defaultSettings();
+  settings.primitives['oscilloscope'].role = 'solo';
+
+  const generator = new Generator('роль');
+  const scene = new Scene();
+  scene.reseed(makeSeed('роль'));
+  let state = generator.update(moodAt(0), settings, scene.update(moodAt(0), SCENE_CONFIG));
+  for (let frame = 1; frame < 600; frame++) {
+    // Секции меняются: автоматика получает все поводы сменить соло.
+    const section = frame % 200 < 100 ? 'calm' : 'drop';
+    const mood = moodAt(frame * FRAME_MS, { energy: section === 'drop' ? 0.9 : 0.2, section });
+    state = generator.update(mood, settings, scene.update(mood, SCENE_CONFIG));
+  }
+  check('ручная роль «соло» держится вопреки сменам секций',
+    state.focus.solo === 'oscilloscope', `соло ${state.focus.solo}`);
+}
+
+// --- 20. Выключенный примитив не попадает на экран ----------------------------
+{
+  const settings = defaultSettings();
+  const generator = new Generator('выключение');
+  const scene = new Scene();
+  scene.reseed(makeSeed('выключение'));
+
+  // Выключаем всё, кроме одного: пул должен сузиться именно до него.
+  for (const id of ALL_PRIMITIVE_IDS) settings.primitives[id].enabled = id === 'wave-mesh';
+
+  let state = generator.update(moodAt(0), settings, scene.update(moodAt(0), SCENE_CONFIG));
+  for (let frame = 1; frame < 400; frame++) {
+    const mood = moodAt(frame * FRAME_MS, { energy: 0.5, section: 'steady' });
+    state = generator.update(mood, settings, scene.update(mood, SCENE_CONFIG));
+  }
+  const banned = [...state.weights.entries()]
+    .filter(([id]) => settings.primitives[id].enabled === false && id !== 'kaleidoscope')
+    .reduce((sum, [, weight]) => sum + weight, 0);
+  check('выключенные примитивы остаются в нуле', banned < 0.02, `суммарный вес ${banned.toFixed(3)}`);
+}
+
+// --- 21. Параметры примитивов: дефолты, границы и расширенный режим -----------
+{
+  // Каждый параметр, который читает примитив, обязан быть в состоянии
+  // генератора: обращение к отсутствующему ключу дало бы NaN в геометрии.
+  const settings = defaultSettings();
+  const generator = new Generator('параметры');
+  const scene = new Scene();
+  scene.reseed(makeSeed('параметры'));
+  const state = generator.update(moodAt(0), settings, scene.update(moodAt(0), SCENE_CONFIG));
+
+  let missing = 0;
+  for (const id of ALL_PRIMITIVE_IDS) {
+    const tuning = state.tunings.get(id);
+    for (const spec of PRIMITIVE_PARAMS[id]) {
+      if (typeof tuning?.[spec.key] !== 'number') missing++;
+    }
+  }
+  check('у каждого примитива заполнены все его параметры', missing === 0, `пропусков ${missing}`);
+
+  // Обычный режим обязан обрезать значение из расширенного: иначе выключение
+  // расширенного режима оставило бы ломающее значение жить дальше.
+  const spec = PRIMITIVE_PARAMS['wave-mesh'][0];
+  const wide = resolvePrimitiveParams('wave-mesh', { [spec.key]: 400 }, true);
+  const narrow = resolvePrimitiveParams('wave-mesh', { [spec.key]: 400 }, false);
+  check('расширенный режим снимает границу, обычный — возвращает',
+    wide[spec.key] > spec.max && narrow[spec.key] === spec.max,
+    `расширенный ${wide[spec.key]}, обычный ${narrow[spec.key]}`);
+}
+
+// --- 22. Пресеты: снимок, экспорт и импорт -----------------------------------
+{
+  // Экспорт нужен ровно для переноса: то, что ушло в файл, должно вернуться
+  // тем же. Проверяем на снимке, а не на хранилище — localStorage тут нет.
+  const settings = defaultSettings();
+  settings.light.bloom = 0.13;
+  settings.primitives.spectrum.params.bars = 96;
+
+  const json = exportPresets([{ name: 'Проверка', settings, savedAt: 1 }]);
+  const parsed = JSON.parse(json) as { app: string; presets: Array<{ settings: unknown }> };
+  const restored = mergeSettings(parsed.presets[0].settings);
+  check('пресет переживает экспорт и обратное слияние',
+    parsed.app === 'soundvision'
+      && restored.light.bloom === 0.13
+      && restored.primitives.spectrum.params.bars === 96,
+    `bloom ${restored.light.bloom}, столбцов ${restored.primitives.spectrum.params.bars}`);
+
+  // Лимит вспышек не должен подниматься ничем: ни пресетом, ни импортом.
+  const unsafe = mergeSettings({ ...settings, transients: { ...settings.transients, maxFlashHz: 30 } });
+  check('импорт не поднимает лимит вспышек выше безопасного',
+    unsafe.transients.maxFlashHz <= MAX_SAFE_FLASH_HZ,
+    `${unsafe.transients.maxFlashHz} Гц`);
+}
+
+// --- 23. Встроенные пресеты собираются и остаются валидными -------------------
+{
+  let broken = 0;
+  const names: string[] = [];
+  for (const preset of PRESET_PROFILES) {
+    const settings = defaultSettings();
+    preset.apply(settings);
+    names.push(preset.name);
+    // Слияние поверх дефолтов — то же, что делает загрузка: пресет обязан
+    // пережить её без потерь и без выхода за диапазоны.
+    const merged = mergeSettings(settings);
+    if (merged.transients.maxFlashHz > MAX_SAFE_FLASH_HZ) broken++;
+    for (const id of ALL_PRIMITIVE_IDS) {
+      for (const spec of PRIMITIVE_PARAMS[id]) {
+        const value = merged.primitives[id].params[spec.key];
+        if (!Number.isFinite(value) || value < spec.min || value > spec.max) broken++;
+      }
+    }
+  }
+  check('все встроенные пресеты валидны после загрузки', broken === 0,
+    `${names.length} шт.: ${names.join(', ')}`);
 }
 
 console.log(failures === 0 ? '\nвсё сошлось' : `\nпроблем: ${failures}`);

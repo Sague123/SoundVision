@@ -49,14 +49,15 @@ export class FlowFieldPrimitive implements DrawPrimitive {
     // Плотность растёт корнем, а не линейно: на пике линии должны сгущаться
     // в гребни, а не покрывать кадр целиком.
     const count = Math.floor(
-      MAX_PARTICLES * (0.05 + Math.sqrt(params.density) * 0.28) * (0.35 + weight * 0.65),
+      MAX_PARTICLES * (0.05 + Math.sqrt(params.density) * 0.28) * (0.35 + weight * 0.65)
+      * frame.tuning.particles,
     );
     if (count <= 0) return;
 
     const dt = Math.min(0.05, frame.dtMs / 1000);
     const seconds = frame.timeMs / 1000;
     const turbulence = 1 + params.chaos * 2.4;
-    const velocity = 30 + params.speed * 230 + mood.energy * 260;
+    const velocity = (30 + params.speed * 230 + mood.energy * 260) * frame.tuning.speed;
     const step = velocity * dt;
 
     // Фронты волн от ударов: вещество расталкивается там, где проходит волна.
@@ -68,7 +69,7 @@ export class FlowFieldPrimitive implements DrawPrimitive {
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
     // Одна-две физические точки: толстые линии заливают кадр площадью.
-    ctx.lineWidth = Math.max(1, 1 + params.sharpness * 0.8);
+    ctx.lineWidth = Math.max(1, (1 + params.sharpness * 0.8) * frame.tuning.lineWidth);
 
     const bandSize = Math.ceil(count / COLOR_BANDS);
     for (let band = 0; band < COLOR_BANDS; band++) {
@@ -80,7 +81,9 @@ export class FlowFieldPrimitive implements DrawPrimitive {
       for (let i = from; i < to; i++) {
         const x = this.xs[i];
         const y = this.ys[i];
-        const angle = this.field.angleAt(x, y, seconds, params.speed, params.scale, turbulence);
+        const angle = this.field.angleAt(
+          x, y, seconds, params.speed, params.scale * frame.tuning.fieldScale, turbulence,
+        );
         FlowField.pushAt(waves, x, y, this.push);
         const nx = x + Math.cos(angle) * step + this.push.x;
         const ny = y + Math.sin(angle) * step + this.push.y;

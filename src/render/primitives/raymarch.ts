@@ -34,6 +34,11 @@ uniform float uSharpness;
 uniform float uChaos;
 uniform float uWarp;
 uniform float uSeed;
+/* Свои параметры примитива из панели. */
+uniform float uTuneRadius;
+uniform float uTuneRipple;
+uniform float uTuneFacets;
+uniform float uTuneGlow;
 // Импульс: xy — точка удара в кадре, z — сила. uImpulseRing — радиус фронта.
 uniform vec3 uImpulse;
 uniform float uImpulseRing;
@@ -74,7 +79,7 @@ float map(vec3 p) {
   p.xy *= rot(uTime * 0.07 * (0.3 + uSpeed));
 
   float breathe = 1.0 + uEnergy * 0.22 + sin(uBeatPhase * 6.2831) * uEnergy * 0.1;
-  float radius = mix(0.34, 0.6, uScale) * breathe;
+  float radius = mix(0.34, 0.6, uScale) * breathe * uTuneRadius;
 
   float sphere = sdSphere(p, radius);
   float torus = sdTorus(p, vec2(radius * 1.05, mix(0.5, 0.12, uSharpness) * radius));
@@ -94,7 +99,7 @@ float map(vec3 p) {
   // Глубина складок считается от радиуса, а не в абсолютных единицах. С
   // абсолютной глубиной складки раздували эффективный радиус тела почти вдвое:
   // луч «цеплялся» за складку далеко от самой формы, и она занимала весь кадр.
-  shape -= ripple * radius * (0.02 + uChaos * 0.1 + uNoisiness * 0.04);
+  shape -= ripple * radius * (0.02 + uChaos * 0.1 + uNoisiness * 0.04) * uTuneRipple * 2.0;
 
   // Волна от удара идёт сферическим фронтом и коробит поверхность на своём пути.
   if (uImpulse.z > 0.001) {
@@ -171,7 +176,8 @@ void main() {
     float sliceLine = smoothstep(0.88, 1.0, slice);
 
     // Линии по нормали добавляют структуру там, где форма поворачивается.
-    float facet = smoothstep(0.9, 1.0, abs(fract(diffuse * (3.0 + uSharpness * 6.0)) - 0.5) * 2.0);
+    float facet = smoothstep(0.9, 1.0, abs(fract(diffuse * (3.0 + uSharpness * 6.0)) - 0.5) * 2.0)
+      * uTuneFacets * 2.0;
 
     color = uColorA * sliceLine * (0.5 + diffuse * 0.6)
           + uColorB * facet * 0.35
@@ -181,10 +187,10 @@ void main() {
 
   // Свечение оставлено совсем слабым: на контурной картинке оно только
   // подсвечивает линии, а не наполняет пустоту.
-  color += uColorC * min(glow, 1.0) * (0.015 + uEnergy * 0.03);
+  color += uColorC * min(glow, 1.0) * (0.015 + uEnergy * 0.03) * uTuneGlow;
   // Вспышка умножается на близость к форме: раньше она прибавлялась ко всем
   // пикселям кадра и держала ровную серую подложку поверх чёрного фона.
-  color += uColorA * uLightFlash * glow * 0.4;
+  color += uColorA * uLightFlash * glow * 0.4 * uTuneGlow;
 
   // Тон-маппинг Рейнхарда: слой кладётся в композицию через 'lighter',
   // поэтому значения выше единицы выбивают кадр в белое — ограничиваем здесь.
@@ -265,6 +271,10 @@ export class RaymarchPrimitive implements DrawPrimitive {
     gl.uniform1f(u.uChaos!, params.chaos);
     gl.uniform1f(u.uWarp!, params.warp);
     gl.uniform1f(u.uSeed!, this.seedValue);
+    gl.uniform1f(u.uTuneRadius!, frame.tuning.radius);
+    gl.uniform1f(u.uTuneRipple!, frame.tuning.ripple);
+    gl.uniform1f(u.uTuneFacets!, frame.tuning.facets);
+    gl.uniform1f(u.uTuneGlow!, frame.tuning.glow);
 
     // Из всех живых волн шейдеру отдаём самую сильную: остальные на форме
     // всё равно не читаются, а каждая лишняя стоит целого прохода по кадру.
@@ -331,6 +341,7 @@ export class RaymarchPrimitive implements DrawPrimitive {
     for (const name of [
       'uResolution', 'uTime', 'uEnergy', 'uBrightness', 'uNoisiness', 'uFlux', 'uBeatPhase',
       'uDensity', 'uSpeed', 'uScale', 'uSharpness', 'uChaos', 'uWarp', 'uSeed',
+      'uTuneRadius', 'uTuneRipple', 'uTuneFacets', 'uTuneGlow',
       'uImpulse', 'uImpulseRing', 'uLightAngle', 'uLightFlash',
       'uColorA', 'uColorB', 'uColorC',
     ]) {

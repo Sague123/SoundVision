@@ -160,7 +160,7 @@ export class Compositor {
     this.applyQuality(mood.timeMs, settings);
     const state = this.generator.update(mood, settings, scene);
 
-    const frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight'> = {
+    const frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight' | 'tuning'> = {
       width: this.width,
       height: this.height,
       mood,
@@ -171,7 +171,9 @@ export class Compositor {
     };
 
     if (settings.layers.base.enabled) this.base.render(frame, state, settings, cover);
-    const activePrimitives = settings.layers.genre.enabled ? this.genre.render(frame, state) : [];
+    const activePrimitives = settings.layers.genre.enabled
+      ? this.genre.render(frame, state, clamp01(settings.memory.trails))
+      : [];
 
     this.transient.update(mood, settings, scene, settings.particles);
     const transientDebug = settings.layers.transient.enabled
@@ -179,7 +181,7 @@ export class Compositor {
       : { particles: 0, rings: 0, flash: 0, particleTypes: [] };
 
     this.compose(settings, scene);
-    this.measureLuminance();
+    this.measureLuminance(settings);
     const posted = this.applyPost(scene, settings, palette);
 
     const frameMs = performance.now() - started;
@@ -337,7 +339,7 @@ export class Compositor {
    * Считается по крошечной копии и не каждый кадр: getImageData синхронизирует
    * конвейер, а порог по своей природе медленный и в частых замерах не нуждается.
    */
-  private measureLuminance(): void {
+  private measureLuminance(settings: Settings): void {
     if (this.frameCounter++ % LUMA_INTERVAL_FRAMES !== 0) return;
     const ctx = this.lumaCtx;
     if (!ctx) return;
@@ -358,7 +360,9 @@ export class Compositor {
     // кадра, а не весь кадр целиком. Именно это и не даёт выжечь картинку.
     // Порог держится заметно выше средней яркости: на тёмной картинке с
     // тонкими линиями светиться должны только сами линии, а не фон вокруг них.
-    const target = clamp(0.3, 0.92, mean * 2.2 + 0.3);
+    // Ручной сдвиг порога складывается с адаптивным: плюс оставляет свечение
+    // только самому яркому, минус опускает порог к фону.
+    const target = clamp(0.3, 0.92, mean * 2.2 + 0.3 + settings.light.bloomBias);
     this.bloomThreshold += (target - this.bloomThreshold) * 0.25;
   }
 
@@ -484,9 +488,18 @@ function sceneConfig(settings: Settings): SceneConfig {
     deformation: settings.deformation.enabled
       ? clamp01(settings.deformation.amount) * clamp01(settings.motion.amount)
       : 0,
+    deformations: {
+      domainWarp: clamp01(settings.deformation.domainWarp),
+      twist: clamp01(settings.deformation.twist),
+      wave: clamp01(settings.deformation.wave),
+      turbulence: clamp01(settings.deformation.turbulence),
+      melt: clamp01(settings.deformation.melt),
+      fold: clamp01(settings.deformation.fold),
+    },
     cut: settings.camera.enabled && settings.camera.cut,
     feedback: clamp01(settings.memory.feedback),
     smear: clamp01(settings.memory.smear),
+    echo: clamp01(settings.memory.echo),
     ghosts: settings.memory.ghosts,
     flare: settings.light.flare,
     budget: Math.max(0, settings.motion.budget),

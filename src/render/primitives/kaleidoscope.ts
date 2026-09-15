@@ -29,13 +29,16 @@ export class KaleidoscopePrimitive implements ModifierPrimitive {
 
   apply(frame: RenderFrame, source: CanvasImageSource): void {
     const { ctx, params, mood, weight } = frame;
-    const sectors = Math.max(3, Math.round(params.symmetry));
+    // Секторы берутся из настройки: симметрия — это то, что настраивают в
+    // первую очередь, а seed задаёт лишь стартовое значение.
+    const sectors = Math.max(3, Math.round(frame.tuning.segments));
     const cx = this.width / 2;
     const cy = this.height / 2;
     // Радиус до угла: иначе в углах экрана остаются пустые клинья.
     const radius = Math.hypot(cx, cy);
     const wedge = (Math.PI * 2) / sectors;
-    const spin = ((frame.timeMs / 1000) * 0.08 * this.spinDirection * (0.3 + params.speed) + this.phase) %
+    const spin = ((frame.timeMs / 1000) * 0.08 * this.spinDirection * (0.3 + params.speed)
+      * (0.4 + frame.tuning.twist * 1.7) + this.phase) %
       (Math.PI * 2);
 
     ctx.clearRect(0, 0, this.width, this.height);
@@ -65,7 +68,7 @@ export class KaleidoscopePrimitive implements ModifierPrimitive {
       ctx.clip();
 
       // Внутрь клина кладём один и тот же кусок исходника, слегка увеличенный.
-      const zoom = 1 + mood.energy * 0.12;
+      const zoom = (1 + mood.energy * 0.12) * frame.tuning.zoom;
       ctx.rotate(-wedge / 2);
       ctx.scale(zoom, zoom);
       ctx.translate(-cx, -cy);

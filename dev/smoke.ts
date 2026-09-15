@@ -97,6 +97,68 @@ let frameInStage = 0;
 let frameMsTotal = 0;
 let renderedInStage = new Set<string>();
 
+/**
+ * Синтетический сигнал: осциллограмма, её правый канал и спектр.
+ *
+ * Без него аудио-примитивы меряются на тишине: `idleMood` отдаёт нулевые
+ * массивы, оscilloscope рисует точку, а ландшафт из волны — стопку прямых.
+ * Метрики в таком прогоне ничего не говорят о примитиве, поэтому харнесс
+ * обязан кормить их тем же, чем кормит рендер живой звук.
+ */
+const WAVE_LENGTH = 2048;
+const SPECTRUM_BINS = 1024;
+const signalLeft = new Float32Array(WAVE_LENGTH);
+const signalRight = new Float32Array(WAVE_LENGTH);
+const signalSpectrum = new Float32Array(SPECTRUM_BINS);
+/** Сдвиг правого канала по фазе — иначе XY-режим осциллографа вырождается в диагональ. */
+const STEREO_PHASE = 0.42;
+
+function synthesizeSignal(t: number, energy: number, beatPhase: number): void {
+  // Удар: короткая экспонента после доли, она же даёт «дыхание» амплитуды.
+  const hit = Math.exp(-beatPhase * 9);
+  const level = 0.25 + energy * 0.6;
+  // Основной тон и две гармоники — этого хватает, чтобы волна была узнаваемо
+  // музыкальной, а не синусоидой.
+  const f0 = 2.2 + energy * 1.8;
+
+  for (let i = 0; i < WAVE_LENGTH; i++) {
+    const u = (i / WAVE_LENGTH) * Math.PI * 2;
+    const noise = (Math.sin(i * 12.9898 + t * 78.233) * 43758.5453) % 1;
+    const body = Math.sin(u * f0)
+      + Math.sin(u * f0 * 2 + t * 0.7) * 0.45
+      + Math.sin(u * f0 * 3.01 + t * 1.3) * 0.22;
+    const attack = Math.sin(u * f0 * 8 + t) * hit * 0.35;
+    const value = (body * 0.5 + attack + noise * 0.12 * energy) * level;
+    signalLeft[i] = Math.max(-1, Math.min(1, value));
+
+    const v = u + STEREO_PHASE;
+    const bodyR = Math.sin(v * f0)
+      + Math.sin(v * f0 * 2 + t * 0.7) * 0.45
+      + Math.sin(v * f0 * 3.01 + t * 1.3) * 0.22;
+    signalRight[i] = Math.max(-1, Math.min(1, (bodyR * 0.5 + attack * 0.8) * level));
+  }
+
+  /*
+   * Спектр: спад по частоте плюс несколько подвижных пиков.
+   *
+   * Масштаб здесь не произвольный. Анализатор отдаёт линейную магнитуду
+   * `10^(dB/20)`, и у реальной музыки это примерно 0.01..0.15 с редкими
+   * пиками до 0.3 — единица означала бы 0 dB на одном бине. Примитивы уже
+   * умножают спектр на свои коэффициенты в расчёте на этот масштаб, поэтому
+   * харнесс обязан его повторять: спектр «от нуля до единицы» насыщал бы все
+   * столбцы до потолка и врал бы в метриках.
+   */
+  const SPECTRUM_SCALE = 0.13;
+  for (let bin = 0; bin < SPECTRUM_BINS; bin++) {
+    const f = bin / SPECTRUM_BINS;
+    const tilt = Math.exp(-f * 4.5);
+    const peaks = Math.abs(Math.sin(f * 40 + t * 0.9)) * 0.35
+      + Math.abs(Math.sin(f * 7 + t * 0.3)) * 0.4;
+    const kick = f < 0.08 ? hit * 0.6 : 0;
+    signalSpectrum[bin] = Math.min(1, (tilt * (0.5 + peaks) + kick) * level * SPECTRUM_SCALE);
+  }
+}
+
 /** Правдоподобный mood vector: энергия дышит, удары идут в темпе. */
 function synthesize(timeMs: number, section: Section): MoodVector {
   const t = timeMs / 1000;
@@ -104,6 +166,7 @@ function synthesize(timeMs: number, section: Section): MoodVector {
   const beatPhase = (t * (bpm / 60)) % 1;
   const base = idleMood(timeMs);
   const energy = section === 'calm' ? 0.2 : section === 'drop' ? 0.9 : 0.55;
+  synthesizeSignal(t, energy, beatPhase);
 
   return {
     ...base,
@@ -120,6 +183,10 @@ function synthesize(timeMs: number, section: Section): MoodVector {
     section,
     energySlope: section === 'buildup' ? 0.4 : 0,
     silent: false,
+    waveform: signalLeft,
+    waveformRight: signalRight,
+    spectrum: signalSpectrum,
+    stereo: true,
     timeMs,
     deltaMs: 16.7,
   };

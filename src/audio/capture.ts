@@ -15,6 +15,15 @@ export interface AudioCapture {
   stream: MediaStream;
   context: AudioContext;
   analyser: AnalyserNode;
+  /**
+   * Анализаторы отдельных каналов. Нужны осциллографу в режиме XY: фигуры
+   * Лиссажу рисуются из левого и правого каналов как из X и Y.
+   * При моно-источнике оба указывают на один и тот же анализатор.
+   */
+  left: AnalyserNode;
+  right: AnalyserNode;
+  /** Действительно ли источник стерео. */
+  stereo: boolean;
   source: MediaStreamAudioSourceNode;
   /** Вызывается, когда пользователь остановил шеринг через плашку браузера. */
   onEnded(cb: () => void): void;
@@ -22,6 +31,16 @@ export interface AudioCapture {
 }
 
 export const FFT_SIZE = 2048;
+
+/** Все анализаторы настраиваются одинаково: сглаживаем мы сами, по фичам. */
+function makeAnalyser(context: AudioContext): AnalyserNode {
+  const analyser = context.createAnalyser();
+  analyser.fftSize = FFT_SIZE;
+  analyser.smoothingTimeConstant = 0;
+  analyser.minDecibels = -100;
+  analyser.maxDecibels = -10;
+  return analyser;
+}
 
 export async function captureSystemAudio(): Promise<AudioCapture> {
   if (!navigator.mediaDevices?.getDisplayMedia) {
@@ -71,13 +90,24 @@ export async function captureSystemAudio(): Promise<AudioCapture> {
   if (context.state === 'suspended') await context.resume();
 
   const source = context.createMediaStreamSource(stream);
-  const analyser = context.createAnalyser();
-  analyser.fftSize = FFT_SIZE;
-  analyser.smoothingTimeConstant = 0; // сглаживаем сами, по каждой фиче отдельно
-  analyser.minDecibels = -100;
-  analyser.maxDecibels = -10;
+  const analyser = makeAnalyser(context);
   source.connect(analyser);
   // Analyser никуда не выводим — звук не дублируем в колонки.
+
+  // Каналы разводим отдельно: для фигур Лиссажу нужны именно две независимые
+  // оси. Если источник моно, сплиттер отдаст один и тот же сигнал в оба
+  // выхода — тогда XY выродится в диагональ, и примитив это учитывает.
+  const stereo = (source.channelCount ?? 2) > 1;
+  let left = analyser;
+  let right = analyser;
+  if (stereo) {
+    const splitter = context.createChannelSplitter(2);
+    source.connect(splitter);
+    left = makeAnalyser(context);
+    right = makeAnalyser(context);
+    splitter.connect(left, 0);
+    splitter.connect(right, 1);
+  }
 
   const endedCallbacks: Array<() => void> = [];
   audioTracks[0].addEventListener('ended', () => endedCallbacks.forEach((cb) => cb()));
@@ -86,6 +116,9 @@ export async function captureSystemAudio(): Promise<AudioCapture> {
     stream,
     context,
     analyser,
+    left,
+    right,
+    stereo,
     source,
     onEnded(cb) {
       endedCallbacks.push(cb);

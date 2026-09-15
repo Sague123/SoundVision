@@ -299,12 +299,27 @@ export interface SceneConfig {
   pressureWave: boolean;
   /** Общий множитель постоянных деформаций вещества, 0..1. */
   deformation: number;
+  /**
+   * Вес каждой деформации в отдельности, 0..1. Общий множитель говорит,
+   * сколько деформации всего, а это — какой именно: одна ручка «сила» не
+   * даёт отличить закрутку от стекания.
+   */
+  deformations: {
+    domainWarp: number;
+    twist: number;
+    wave: number;
+    turbulence: number;
+    melt: number;
+    fold: number;
+  };
   /** Монтажные склейки на границах частей. */
   cut: boolean;
   /** Доля обратной связи кадра, 0..1 (умножается на потолок безопасности). */
   feedback: number;
   /** Временное размазывание на дропе, 0..1. */
   smear: number;
+  /** Сила ритмического эха: повтор удара на 1/2, 1/4 или пунктирную 3/8. */
+  echo: number;
   /** Призраки прошлых ударов. */
   ghosts: boolean;
   /** Блики на пиковых ударах. */
@@ -332,9 +347,13 @@ export function defaultSceneConfig(): SceneConfig {
     slice: true,
     pressureWave: true,
     deformation: 0.6,
+    deformations: {
+      domainWarp: 0.7, twist: 0.4, wave: 0.4, turbulence: 0.35, melt: 0.3, fold: 0.25,
+    },
     cut: false,
     feedback: 0.5,
     smear: 0.6,
+    echo: 0.5,
     ghosts: true,
     flare: true,
     budget: 2.4,
@@ -385,6 +404,9 @@ export class Scene {
   private readonly pendingEchoes: PendingEcho[] = [];
   private noise = new SimplexNoise();
   private rng = mulberry32(1);
+  // Дрожание камеры берёт случайность из отдельного потока: иначе включение
+  // тряски сдвигало бы все остальные розыгрыши сцены и меняло дрейф с орбитой.
+  private shakeRng = mulberry32(2);
 
   private axis = 0.2;
   private deformation = 0;
@@ -439,6 +461,7 @@ export class Scene {
 
   reseed(seed: GeneratorSeed): void {
     this.rng = mulberry32(seed.seed ^ 0x3c6ef372);
+    this.shakeRng = mulberry32(seed.seed ^ 0x5f356495);
     this.noise = new SimplexNoise(this.rng);
     this.driftSeedX = this.rng() * 100;
     this.driftSeedY = this.rng() * 100;
@@ -529,6 +552,10 @@ export class Scene {
   /** Память: тот же удар повторяется через 1/2 и 1/4 такта, слабее. */
   private scheduleEchoes(mood: MoodVector, x: number, y: number, strength: number, profile: BandProfile = SILENT_PROFILE): void {
     if (strength < 0.25) return; // слабые удары эха не оставляют, иначе каша
+    // Ползунок эха делит силу повтора, а не отменяет расписание: так эхо
+    // ослабевает плавно, а не пропадает целиком на первом же щелчке.
+    const echoAmount = clamp01(this.config.echo);
+    if (echoAmount <= 0) return;
     const barMs = (60000 / Math.max(40, mood.bpm)) * 4;
 
     for (const division of this.echoPattern) {
@@ -537,7 +564,7 @@ export class Scene {
         atMs: mood.timeMs + barMs * division,
         x,
         y,
-        strength: strength * (division === 0.5 ? 0.45 : 0.22),
+        strength: strength * (division === 0.5 ? 0.45 : 0.22) * (echoAmount / 0.5),
         profile,
       });
     }
@@ -840,14 +867,17 @@ export class Scene {
       * (1 - mood.energy)
       * smoothstep(0.05, 0.35, substance.axis);
 
+    // Вес каждой деформации нормируем на её умолчание: ползунок на месте по
+    // умолчанию ничего не меняет, а не приглушает картинку вдвое.
+    const w = this.config.deformations;
     return {
-      domainWarp: clamp01((0.12 + mood.noisiness * 0.35 + peak * 0.5) * scale),
-      twist: clamp01((0.06 + mood.energy * 0.25 + substance.axis * 0.2 + peak * 0.3) * scale),
-      wave: clamp01((0.08 + mood.bands.mid * 0.3 + mood.flux * 0.3) * scale),
-      turbulence: clamp01((0.05 + mood.noisiness * 0.4 + substance.axis * 0.3) * scale),
-      melt: clamp01(meltCondition * 0.7 * scale),
+      domainWarp: clamp01((0.12 + mood.noisiness * 0.35 + peak * 0.5) * scale * (w.domainWarp / 0.7)),
+      twist: clamp01((0.06 + mood.energy * 0.25 + substance.axis * 0.2 + peak * 0.3) * scale * (w.twist / 0.4)),
+      wave: clamp01((0.08 + mood.bands.mid * 0.3 + mood.flux * 0.3) * scale * (w.wave / 0.4)),
+      turbulence: clamp01((0.05 + mood.noisiness * 0.4 + substance.axis * 0.3) * scale * (w.turbulence / 0.35)),
+      melt: clamp01(meltCondition * 0.7 * scale * (w.melt / 0.3)),
       // Складки живут на кристаллической части оси — там же, где калейдоскоп.
-      fold: clamp01(smoothstep(0.55, 1, substance.axis) * 0.5 * scale),
+      fold: clamp01(smoothstep(0.55, 1, substance.axis) * 0.5 * scale * (w.fold / 0.25)),
       time: this.warpTime,
     };
   }
@@ -976,10 +1006,13 @@ export class Scene {
     // Тряска: низ бьёт по вертикали, верх даёт дрожь без выраженной оси.
     this.shakeEnergy = Math.max(0, this.shakeEnergy - dt * 3.2);
     const shakeAmplitude = this.shakeEnergy * this.shakeEnergy * 0.03;
-    const jitterAngle = Math.random() * Math.PI * 2;
-    const shakeX = Math.cos(jitterAngle) * shakeAmplitude * (1 - this.shakeAxis);
-    const shakeY = (Math.sin(jitterAngle) * (1 - this.shakeAxis)
-      + (Math.random() * 2 - 1) * this.shakeAxis * 1.4) * shakeAmplitude;
+    const jitterAngle = this.shakeRng() * Math.PI * 2;
+    // Изотропная часть даёт по вертикали в среднем 2/pi амплитуды, поэтому
+    // вертикальный удар баса берёт коэффициент 2: иначе «ось» баса неразличима.
+    const isotropy = 1 - this.shakeAxis;
+    const shakeX = Math.cos(jitterAngle) * shakeAmplitude * isotropy;
+    const shakeY = (Math.sin(jitterAngle) * isotropy
+      + (this.shakeRng() * 2 - 1) * this.shakeAxis * 2) * shakeAmplitude;
 
     this.compression = Math.max(0, this.compression - dt * 4.2);
 

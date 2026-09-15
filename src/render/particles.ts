@@ -71,6 +71,12 @@ export interface ParticleConfig {
   manual: ParticleType[];
   /** Общий множитель плотности, 0..1. */
   density: number;
+  /** Множитель времени жизни частицы. */
+  life: number;
+  /** Множитель скорости в общем поле потока. */
+  speed: number;
+  /** Множитель размера частицы. */
+  size: number;
   enabled: boolean;
 }
 
@@ -238,12 +244,17 @@ export class ParticleSystem {
 
       const amount = Math.min(whole, MAX_PARTICLES - this.particles.length);
       for (let i = 0; i < amount; i++) {
-        this.particles.push(this.create(type, mood, freshImpulse));
+        this.particles.push(this.create(type, mood, freshImpulse, config));
       }
     }
   }
 
-  private create(type: ParticleType, mood: MoodVector, impulse: Impulse | null): Particle {
+  private create(
+    type: ParticleType,
+    mood: MoodVector,
+    impulse: Impulse | null,
+    config: ParticleConfig,
+  ): Particle {
     const rng = this.rng;
     const minSide = Math.min(this.width, this.height);
     // Ударные типы стартуют из точки удара, фоновые — где угодно.
@@ -331,6 +342,12 @@ export class ParticleSystem {
         base.spin = (rng() * 2 - 1) * 2.4;
         break;
     }
+    // Ручки панели домножают уже собранные значения типа: каждый тип
+    // сохраняет свой характер, меняется только общий масштаб.
+    base.maxLife *= Math.max(0.05, config.life);
+    base.size *= Math.max(0.05, config.size);
+    base.vx *= config.speed;
+    base.vy *= config.speed;
     base.life = base.maxLife;
     if (mood.section === 'drop') base.maxLife *= 0.8; // на дропе всё живёт короче
     return base;

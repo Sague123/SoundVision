@@ -65,8 +65,9 @@ export class MetaballsPrimitive implements DrawPrimitive {
 
   draw(frame: RenderFrame): void {
     const { ctx, params, mood, palette, weight } = frame;
-    const count = Math.max(3, Math.round(MAX_BALLS * (0.22 + params.density * 0.78)));
-    const t = (frame.timeMs / 1000) * (0.06 + params.speed * 0.3) + this.phase;
+    const count = Math.min(MAX_BALLS,
+      Math.max(2, Math.round(frame.tuning.balls * (0.6 + params.density * 0.6))));
+    const t = (frame.timeMs / 1000) * (0.06 + params.speed * 0.3) * frame.tuning.speed + this.phase;
     const radius = (0.05 + params.scale * 0.09) * Math.min(this.cols, this.rows)
       * (0.8 + mood.energy * 0.4);
 
@@ -82,14 +83,14 @@ export class MetaballsPrimitive implements DrawPrimitive {
 
     // Несколько вложенных изолиний вместо одной заливки: получается «горбыль»
     // из тонких линий, где яркость набирается их сгущением, а не площадью.
-    const shells = 1 + Math.round(params.density * 2);
+    const shells = Math.max(1, Math.round(frame.tuning.shells * (0.6 + params.density * 0.6)));
     for (let shell = 0; shell < shells; shell++) {
       const level = ISO_LEVEL * (0.7 + shell * 0.45);
       this.contour.build(this.field, this.cols, this.rows, level);
       if (this.contour.length === 0) continue;
       const fade = 1 - shell / (shells + 0.5);
       ctx.strokeStyle = palette.accentAlpha(0.2 + shell * 0.2, (0.22 + mood.energy * 0.3) * fade * weight);
-      ctx.lineWidth = Math.max(1, (0.9 + params.sharpness) * fade);
+      ctx.lineWidth = Math.max(1, (0.9 + params.sharpness) * fade * frame.tuning.lineWidth);
       strokeContour(ctx, this.contour, scaleX, scaleY);
     }
     ctx.restore();

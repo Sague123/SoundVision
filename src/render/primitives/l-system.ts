@@ -63,11 +63,13 @@ export class LSystemPrimitive implements DrawPrimitive {
 
   draw(frame: RenderFrame): void {
     const { ctx, params, mood, palette, weight } = frame;
-    const depth = 3 + Math.round(params.density * 2);
+    const depth = Math.max(1, Math.round(frame.tuning.depth * (0.6 + params.density * 0.6)));
     const t = (frame.timeMs / 1000) * (0.05 + params.speed * 0.25) + this.phase;
     // Угол ветвления дышит шумом — дерево «качается», а не стоит колом.
-    const angle = (14 + params.chaos * 26 + this.noise.noise2D(t, 4.2) * (4 + mood.flux * 14)) * (Math.PI / 180);
-    const length = Math.min(this.width, this.height) * (0.028 + params.scale * 0.05);
+    const angle = (14 + params.chaos * 26 + this.noise.noise2D(t, 4.2) * (4 + mood.flux * 14))
+      * frame.tuning.angle * (Math.PI / 180);
+    const length = Math.min(this.width, this.height) * (0.028 + params.scale * 0.05)
+      * frame.tuning.length;
 
     const key = `${depth}|${angle.toFixed(3)}|${length.toFixed(2)}|${this.width}x${this.height}`;
     if (key !== this.cachedKey) {
@@ -96,7 +98,8 @@ export class LSystemPrimitive implements DrawPrimitive {
           currentDepth = segment.depth;
           const tone = currentDepth / this.maxDepth;
           ctx.strokeStyle = palette.accentAlpha(tone, (0.18 + mood.energy * 0.5) * weight);
-          ctx.lineWidth = Math.max(0.5, (1 - tone) * (1.4 + params.sharpness * 3.4) + 0.4);
+          ctx.lineWidth = Math.max(0.5,
+            ((1 - tone) * (1.4 + params.sharpness * 3.4) + 0.4) * frame.tuning.lineWidth);
           ctx.beginPath();
         }
         ctx.moveTo(segment.x1, segment.y1);

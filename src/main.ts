@@ -20,7 +20,7 @@ import { DebugOverlay } from './ui/debug-overlay.ts';
 import { loadFonts } from './ui/fonts.ts';
 import { LyricsOverlay } from './ui/lyrics-overlay.ts';
 import { NowPlayingCard } from './ui/now-playing-card.ts';
-import { loadSettings, saveSettings } from './ui/profiles.ts';
+import { loadSettings, saveSettings } from './ui/presets.ts';
 import { SettingsPanel } from './ui/settings-panel.ts';
 import { StartScreen } from './ui/start-screen.ts';
 
@@ -45,6 +45,8 @@ class App {
   private capture: AudioCapture | null = null;
   private moodEngine: MoodEngine | null = null;
   private frameHandle = 0;
+  /** Время последнего отрисованного кадра — по нему работает лимит fps. */
+  private lastFrameMs = 0;
   private lastStatusMs = 0;
   private lyricsStatus = 'нет трека';
   private lyricsAbort: AbortController | null = null;
@@ -92,6 +94,9 @@ class App {
     this.wireInput();
     this.resize();
     window.addEventListener('resize', () => this.resize());
+    // Панель выезжает с анимацией, поэтому одного события resize мало:
+    // холст меняет ширину постепенно, и ловить это надо наблюдателем.
+    new ResizeObserver(() => this.resize()).observe(this.canvas);
   }
 
   async init(): Promise<void> {
@@ -142,6 +147,17 @@ class App {
     this.frameHandle = requestAnimationFrame(this.frame);
     const engine = this.moodEngine;
     if (!engine) return;
+
+    // Лимит кадров: пропускаем кадр целиком, а не только рендер, — анализ
+    // читает те же данные анализатора и на пропуске ничего не теряет.
+    const limit = this.settings.quality.fpsLimit;
+    if (limit > 0) {
+      // Полкадра допуска: без него частота залипает на половине лимита,
+      // потому что монитор почти никогда не попадает в интервал точно.
+      const minStep = 1000 / limit - 8;
+      if (timestamp - this.lastFrameMs < minStep) return;
+    }
+    this.lastFrameMs = timestamp;
 
     const mood = engine.update(timestamp, this.settings.audio as MoodConfig);
     this.renderFrame(mood);
@@ -289,6 +305,7 @@ class App {
       switch (event.key.toLowerCase()) {
         case 's':
           this.panel.toggleOpen();
+          this.root.classList.toggle('app--panel', this.panel.isOpen);
           break;
         case 'f':
           void this.toggleFullscreen();
@@ -303,6 +320,7 @@ class App {
           break;
         case 'escape':
           this.panel.close();
+          this.root.classList.remove('app--panel');
           break;
         default:
           break;
@@ -341,8 +359,14 @@ class App {
     }
   }
 
+  /**
+   * Размер берём у самого холста, а не у окна: открытая панель ужимает сцену,
+   * и по `window.innerWidth` рендер оказался бы шире видимой области.
+   */
   private resize(): void {
-    this.compositor.resize(window.innerWidth, window.innerHeight);
+    const width = this.canvas.clientWidth || window.innerWidth;
+    const height = this.canvas.clientHeight || window.innerHeight;
+    this.compositor.resize(width, height);
     if (!this.capture) this.renderIdleFrame();
   }
 }

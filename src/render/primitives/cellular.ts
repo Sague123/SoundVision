@@ -68,7 +68,7 @@ export class CellularPrimitive implements DrawPrimitive {
 
     // Шаг автомата привязан к темпу: сетка «идёт» вместе с треком.
     const beatMs = 60000 / Math.max(40, mood.bpm);
-    const divisions = 1 + Math.round(params.speed * 3);
+    const divisions = Math.max(1, Math.round((1 + params.speed * 3) * frame.tuning.speed));
     const stepMs = Math.max(45, beatMs / divisions);
 
     if (frame.timeMs >= this.nextStepMs) {
@@ -89,7 +89,8 @@ export class CellularPrimitive implements DrawPrimitive {
     ctx.lineCap = 'round';
 
     // Контур тёплой области: границы живых скоплений, а не сами клетки.
-    this.contour.build(this.heat, this.cols, this.rows, 0.34 + params.sharpness * 0.3);
+    this.contour.build(this.heat, this.cols, this.rows,
+      0.18 + params.sharpness * 0.15 + frame.tuning.birth * 0.3);
     if (this.contour.length > 0) {
       ctx.lineWidth = Math.max(1, 0.8 + params.sharpness * 0.7);
       ctx.strokeStyle = palette.accentAlpha(0.45, (0.22 + mood.energy * 0.28) * weight);
@@ -98,8 +99,13 @@ export class CellularPrimitive implements DrawPrimitive {
 
     // Точки на живых клетках — та самая мелкая деталь, которая читается
     // только в нативном разрешении.
-    const dotSize = Math.max(1, Math.min(scaleX, scaleY) * 0.14);
-    ctx.fillStyle = palette.accentAlpha(0.9, (0.18 + mood.energy * 0.25) * weight);
+    const dotSize = Math.max(1, Math.min(scaleX, scaleY) * 0.14 * frame.tuning.cellSize);
+    if (frame.tuning.dots <= 0.02) {
+      ctx.restore();
+      return;
+    }
+    ctx.fillStyle = palette.accentAlpha(0.9,
+      (0.18 + mood.energy * 0.25) * weight * frame.tuning.dots / 0.7);
     ctx.beginPath();
     for (let y = 0; y < this.rows; y++) {
       const rowOffset = y * this.cols;

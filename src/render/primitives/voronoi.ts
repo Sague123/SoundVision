@@ -78,14 +78,14 @@ export class VoronoiPrimitive implements DrawPrimitive {
     // Чем выше sharpness, тем ближе изолиния к самому ребру, то есть тем тоньше
     // и резче сетка. Низкий sharpness даёт широкие мягкие «коридоры».
     // Порог ближе к единице — уже линия ребра.
-    const level = 0.84 + params.sharpness * 0.11;
+    const level = 0.84 + params.sharpness * 0.055 + frame.tuning.edge * 0.11;
     this.contour.build(this.field, this.cols, this.rows, level);
     if (this.contour.length === 0) return;
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
-    ctx.lineWidth = Math.max(1, 0.8 + params.sharpness * 0.8);
+    ctx.lineWidth = Math.max(1, (0.8 + params.sharpness * 0.8) * frame.tuning.lineWidth);
     ctx.strokeStyle = palette.accentAlpha(0.55, (0.35 + mood.energy * 0.45) * weight);
     strokeContour(ctx, this.contour, this.width / (this.cols - 1), this.height / (this.rows - 1));
     ctx.restore();
@@ -96,8 +96,9 @@ export class VoronoiPrimitive implements DrawPrimitive {
     const { cols, rows, field } = this;
     // Меньше сайтов — крупнее ячейки и меньше рёбер: сетка из сорока ячеек
     // на дропе закрывала кадр целиком.
-    const count = Math.max(4, Math.round(MAX_SITES * (0.1 + params.density * 0.42)));
-    const t = (frame.timeMs / 1000) * (0.05 + params.speed * 0.28) + this.phase;
+    const count = Math.min(MAX_SITES,
+      Math.max(4, Math.round(MAX_SITES * (0.1 + params.density * 0.42) * frame.tuning.sites)));
+    const t = (frame.timeMs / 1000) * (0.05 + params.speed * 0.28) * frame.tuning.speed + this.phase;
     const drift = 0.4 + params.chaos * 1.4;
 
     for (let i = 0; i < count; i++) {

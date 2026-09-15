@@ -38,6 +38,17 @@ export interface MoodVector {
   /** Частотный профиль текущего удара; нули, если удара нет. */
   onsetProfile: BandProfile;
   chroma: Float32Array;
+  /**
+   * Сырая осциллограмма и спектр. Нужны примитивам, которые рисуют сам
+   * сигнал: узнаваемая волна убеждает сильнее любой абстракции, отдалённо
+   * связанной со звуком.
+   */
+  waveform: Float32Array;
+  /** Осциллограмма правого канала; при моно совпадает с левой. */
+  waveformRight: Float32Array;
+  /** Линейные магнитуды спектра, длина fftSize/2. */
+  spectrum: Float32Array;
+  stereo: boolean;
   silent: boolean;
   timeMs: number;
   deltaMs: number;
@@ -59,11 +70,22 @@ export class MoodEngine {
   private readonly beat = new BeatTracker();
   private lastFrameMs = 0;
 
+  private readonly left: AnalyserNode;
+  private readonly right: AnalyserNode;
+  private readonly stereo: boolean;
+  private readonly waveform: Float32Array<ArrayBuffer>;
+  private readonly waveformRight: Float32Array<ArrayBuffer>;
+
   /** Нужен только граф Web Audio — не весь захват; так движок можно гонять на синтетике. */
-  constructor(capture: Pick<AudioCapture, 'context' | 'analyser'>) {
+  constructor(capture: Pick<AudioCapture, 'context' | 'analyser'> & Partial<Pick<AudioCapture, 'left' | 'right' | 'stereo'>>) {
     const sampleRate = capture.context.sampleRate;
     this.features = new FeatureExtractor(capture.analyser, sampleRate);
     this.chroma = new ChromaAnalyzer(sampleRate / capture.analyser.fftSize);
+    this.left = capture.left ?? capture.analyser;
+    this.right = capture.right ?? capture.analyser;
+    this.stereo = capture.stereo ?? false;
+    this.waveform = new Float32Array(new ArrayBuffer(capture.analyser.fftSize * 4));
+    this.waveformRight = new Float32Array(new ArrayBuffer(capture.analyser.fftSize * 4));
   }
 
   update(nowMs: number, config: MoodConfig): MoodVector {
@@ -72,6 +94,9 @@ export class MoodEngine {
     this.lastFrameMs = nowMs;
 
     const raw = this.features.analyze(nowMs, config);
+    this.left.getFloatTimeDomainData(this.waveform);
+    if (this.stereo) this.right.getFloatTimeDomainData(this.waveformRight);
+    else this.waveformRight.set(this.waveform);
     const chroma = this.chroma.update(raw.spectrum, raw.silent);
     const key = this.chroma.estimateKey();
 
@@ -94,6 +119,10 @@ export class MoodEngine {
       bands: raw.bands,
       onsetProfile: raw.onsetProfile,
       chroma,
+      waveform: this.waveform,
+      waveformRight: this.waveformRight,
+      spectrum: raw.spectrum,
+      stereo: this.stereo,
       silent: raw.silent,
       timeMs: nowMs,
       deltaMs,
@@ -119,6 +148,10 @@ export function idleMood(timeMs = 0): MoodVector {
     bands: { ...SILENT_PROFILE },
     onsetProfile: { ...SILENT_PROFILE },
     chroma: new Float32Array(12),
+    waveform: new Float32Array(2048),
+    waveformRight: new Float32Array(2048),
+    spectrum: new Float32Array(1024),
+    stereo: false,
     silent: true,
     timeMs,
     deltaMs: 16.7,

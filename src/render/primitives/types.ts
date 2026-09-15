@@ -4,8 +4,16 @@ import type { MoodVector } from '../../audio/mood-vector.ts';
 import type { Palette } from '../palette.ts';
 import type { SceneState } from '../scene.ts';
 import type { GeneratorSeed } from '../seed.ts';
+import type { Tuning } from './tuning.ts';
 
 export const ALL_PRIMITIVE_IDS = [
+  // Аудио-примитивы: рисуют сам сигнал, а не абстракцию рядом с ним.
+  'waveform-terrain',
+  'wave-mesh',
+  'spectrum',
+  'radial-waveform',
+  'oscilloscope',
+  // Генеративные.
   'flow-field',
   'metaballs',
   'voronoi',
@@ -18,6 +26,11 @@ export const ALL_PRIMITIVE_IDS = [
 export type PrimitiveId = (typeof ALL_PRIMITIVE_IDS)[number];
 
 export const PRIMITIVE_LABELS: Record<PrimitiveId, string> = {
+  'waveform-terrain': 'Waveform terrain',
+  'wave-mesh': 'Wave mesh',
+  spectrum: 'Spectrum + glitch',
+  'radial-waveform': 'Radial waveform',
+  oscilloscope: 'Oscilloscope / Lissajous',
   'flow-field': 'Flow field',
   metaballs: 'Metaballs',
   voronoi: 'Voronoi',
@@ -59,6 +72,11 @@ export interface RenderFrame {
   /** Состояние сцены: вещество, свет, камера, живые импульсы. */
   scene: SceneState;
   params: GenParams;
+  /**
+   * Свои параметры примитива из панели. Ключи — из `PRIMITIVE_PARAMS`, все
+   * они всегда заполнены: недостающее подставляется дефолтом ещё до кадра.
+   */
+  tuning: Tuning;
   /** Вклад примитива прямо сейчас, 0..1 — этим делается кроссфейд. */
   weight: number;
   dtMs: number;

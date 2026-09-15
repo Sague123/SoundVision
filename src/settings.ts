@@ -9,6 +9,9 @@ import type { FontMoodKey } from './ui/fonts.ts';
 import type { LyricsAnimation } from './ui/lyrics-overlay.ts';
 import { PARTICLE_TYPES, type ParticleType } from './render/particles.ts';
 import { ALL_PRIMITIVE_IDS, type PrimitiveId } from './render/primitives/types.ts';
+import {
+  defaultPrimitiveParams, resolvePrimitiveParams,
+} from './render/primitives/tuning.ts';
 
 export interface LayerSettings {
   enabled: boolean;
@@ -16,7 +19,23 @@ export interface LayerSettings {
   weight: number;
 }
 
+/** Роль примитива в кадре. 'auto' — её назначает система фокуса. */
+export type PrimitiveRole = 'auto' | 'solo' | 'accent' | 'background';
+
+export interface PrimitiveSettings {
+  enabled: boolean;
+  role: PrimitiveRole;
+  /** Свои параметры примитива; ключи — из PRIMITIVE_PARAMS. */
+  params: Record<string, number>;
+}
+
 export interface Settings {
+  /**
+   * Расширенный режим: снимает безопасные границы ползунков. За галочкой
+   * именно потому, что за ней лежат значения, ломающие картинку, — они нужны
+   * для поиска, а не для повседневной настройки.
+   */
+  advanced: boolean;
   audio: {
     smoothing: number;
     energyGain: number;
@@ -49,7 +68,25 @@ export interface Settings {
     manual: PrimitiveId[];
     /** Множитель скорости морфинга между состояниями, 0.2..3. */
     morphRate: number;
+    /**
+     * Соло-режим панели: один примитив на экране, остальные выключены.
+     * Без него параметры примитива не подобрать — он тонет в общем кадре.
+     */
+    solo: PrimitiveId | null;
   };
+  focus: {
+    /** Сколько соло держится минимум и максимум, в секундах. */
+    soloMinSec: number;
+    soloMaxSec: number;
+    /** Вес акцента и фона относительно соло, 0..1. */
+    accentWeight: number;
+    backgroundWeight: number;
+    /** Длительность увода старого соло и ввода нового, мс. */
+    exitMs: number;
+    enterMs: number;
+  };
+  /** Свои настройки каждого примитива — раздел на примитив в панели. */
+  primitives: Record<PrimitiveId, PrimitiveSettings>;
   motion: {
     /**
      * Общий множитель амплитуды движения: камера, тряска, толчки, деформации.
@@ -71,6 +108,8 @@ export interface Settings {
     level: QualityLevel;
     /** Автоснижение при устойчивой просадке fps. */
     auto: boolean;
+    /** Потолок кадров в секунду; 0 — не ограничивать. */
+    fpsLimit: number;
   };
   palette: {
     /** Гармоническая схема; 'auto' — её выбирает seed трека. */
@@ -114,6 +153,18 @@ export interface Settings {
     enabled: boolean;
     /** Общий множитель, 0..1. */
     amount: number;
+    /** Искажение координат шумом от шума — основа всех остальных. */
+    domainWarp: number;
+    /** Закрутка вокруг центра. */
+    twist: number;
+    /** Бегущая волна по кадру. */
+    wave: number;
+    /** Мелкая многооктавная турбулентность. */
+    turbulence: number;
+    /** Стекание вниз. */
+    melt: number;
+    /** Складка: отражение пространства от линии. */
+    fold: number;
   };
   particles: {
     enabled: boolean;
@@ -122,10 +173,21 @@ export interface Settings {
     manual: ParticleType[];
     /** Общая плотность, 0..1. */
     density: number;
+    /** Время жизни частицы, множитель к базовому. */
+    life: number;
+    /** Скорость в общем поле потока, множитель. */
+    speed: number;
+    /** Размер частицы, множитель. */
+    size: number;
   };
   light: {
     /** Сила свечения ярких мест, 0..1. Порог адаптивный, кадр не выжигается. */
     bloom: number;
+    /**
+     * Сдвиг адаптивного порога bloom. Сам порог считается от средней яркости
+     * кадра — ручка только смещает его, иначе на ярком кадре всё выгорает.
+     */
+    bloomBias: number;
     /** Объёмные лучи от источника, 0..1. */
     rays: number;
     /** Контровой свет по силуэтам, 0..1. */
@@ -138,6 +200,8 @@ export interface Settings {
     vignette: boolean;
   };
   memory: {
+    /** Длина следов: сколько прошлого кадра остаётся под новым, 0..1. */
+    trails: number;
     /**
      * Обратная связь кадра: прошлый кадр подмешивается в текущий со сдвигом,
      * масштабом и поворотом. Отсюда бесконечные туннели и спирали.
@@ -147,6 +211,8 @@ export interface Settings {
     smear: number;
     /** Призраки прошлых ударов. */
     ghosts: boolean;
+    /** Ритмическое эхо на 1/2, 1/4 или пунктирную 3/8, 0..1. */
+    echo: number;
   };
   sources: {
     /** Опрашивать Spotify (нужен Client ID и разовая авторизация). */
@@ -167,6 +233,10 @@ export interface Settings {
     card: 'on-change' | 'always' | 'never';
     /** Тонкая линия прогресса трека по нижней кромке экрана. */
     progressLine: boolean;
+    /** Угол, в котором стоит карточка. */
+    cardCorner: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+    /** Сколько карточка держится в режиме «на смену трека», секунд. */
+    cardHoldSec: number;
   };
   lyrics: {
     enabled: boolean;
@@ -192,8 +262,22 @@ export interface Settings {
 
 export const MAX_SAFE_FLASH_HZ = 3;
 
+/** Примитивы, которые рисуют сам сигнал, а не абстракцию рядом с ним. */
+export const AUDIO_PRIMITIVE_IDS: PrimitiveId[] = [
+  'waveform-terrain', 'wave-mesh', 'spectrum', 'radial-waveform', 'oscilloscope',
+];
+
+function defaultPrimitives(): Record<PrimitiveId, PrimitiveSettings> {
+  const out = {} as Record<PrimitiveId, PrimitiveSettings>;
+  for (const id of ALL_PRIMITIVE_IDS) {
+    out[id] = { enabled: true, role: 'auto', params: defaultPrimitiveParams(id) };
+  }
+  return out;
+}
+
 export function defaultSettings(): Settings {
   return {
+    advanced: false,
     audio: {
       smoothing: 0.72,
       energyGain: 1,
@@ -217,7 +301,17 @@ export function defaultSettings(): Settings {
       mode: 'auto',
       manual: ['flow-field', 'metaballs'],
       morphRate: 1,
+      solo: null,
     },
+    focus: {
+      soloMinSec: 22,
+      soloMaxSec: 42,
+      accentWeight: 0.26,
+      backgroundWeight: 0.1,
+      exitMs: 900,
+      enterMs: 1100,
+    },
+    primitives: defaultPrimitives(),
     motion: {
       amount: 1,
       budget: 2.4,
@@ -225,6 +319,7 @@ export function defaultSettings(): Settings {
     quality: {
       level: 'medium',
       auto: true,
+      fpsLimit: 0,
     },
     palette: {
       harmonyId: 'auto',
@@ -250,15 +345,27 @@ export function defaultSettings(): Settings {
     deformation: {
       enabled: true,
       amount: 0.6,
+      // Domain warping идёт первым и сильнее прочих: остальные деформации
+      // ложатся уже на искажённое им пространство.
+      domainWarp: 0.7,
+      twist: 0.4,
+      wave: 0.4,
+      turbulence: 0.35,
+      melt: 0.3,
+      fold: 0.25,
     },
     particles: {
       enabled: true,
       mode: 'auto',
       manual: ['sparks', 'dust'],
       density: 0.6,
+      life: 1,
+      speed: 1,
+      size: 1,
     },
     light: {
       bloom: 0.42,
+      bloomBias: 0,
       // Лучи и контровой свет заметно тише прежнего: оба размазывают свет по
       // большой площади, а кадр должен оставаться в основном тёмным.
       rays: 0.12,
@@ -268,9 +375,11 @@ export function defaultSettings(): Settings {
       vignette: true,
     },
     memory: {
+      trails: 0.35,
       feedback: 0.28,
       smear: 0.45,
       ghosts: true,
+      echo: 0.5,
     },
     sources: {
       spotify: false,
@@ -282,6 +391,8 @@ export function defaultSettings(): Settings {
       useAsBackground: false,
       card: 'on-change',
       progressLine: true,
+      cardCorner: 'top-left',
+      cardHoldSec: 8,
     },
     lyrics: {
       enabled: true,
@@ -354,6 +465,66 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
     },
   },
   {
+    id: 'audio-waves',
+    name: 'Аудио-волны',
+    apply: (s) => {
+      // Соло на ландшафте из волны: это самый прямой показ сигнала, и весь
+      // остальной набор здесь только мешал бы ему.
+      s.generator.mode = 'auto';
+      for (const id of ALL_PRIMITIVE_IDS) {
+        s.primitives[id].role = 'auto';
+        s.primitives[id].enabled = AUDIO_PRIMITIVE_IDS.includes(id);
+      }
+      s.primitives['waveform-terrain'].role = 'solo';
+      s.palette.tuning.chromaBoost = 0.85;
+      s.deformation.amount = 0.25;
+      s.memory.feedback = 0.15;
+      s.light.bloom = 0.5;
+      s.light.rays = 0.08;
+    },
+  },
+  {
+    id: 'max-sharpness',
+    name: 'Максимальная чёткость',
+    apply: (s) => {
+      // Всё, что размазывает кадр, — в ноль: свечение, следы, обратная связь,
+      // деформации. Остаются линии в нативном разрешении и почти чёрный фон.
+      s.quality.level = 'high';
+      s.quality.auto = false;
+      s.light.bloom = 0.15;
+      s.light.rays = 0;
+      s.light.rim = 0.08;
+      s.light.flare = false;
+      s.memory.trails = 0.1;
+      s.memory.feedback = 0;
+      s.memory.smear = 0;
+      s.deformation.amount = 0.2;
+      s.palette.tuning.lightnessBoost = 1.15;
+      s.palette.tuning.chromaBoost = 0.9;
+      for (const id of ALL_PRIMITIVE_IDS) s.primitives[id].params.lineWidth = 1;
+    },
+  },
+  {
+    id: 'min-motion',
+    name: 'Минимум движения',
+    apply: (s) => {
+      // Для тех, кого укачивает: движение, тряска и склейки выключены целиком.
+      s.motion.amount = 0.15;
+      s.motion.budget = 1.2;
+      s.camera.enabled = false;
+      s.camera.amount = 0.15;
+      s.camera.cut = false;
+      s.deformation.amount = 0.15;
+      s.transients.shake = false;
+      s.transients.punchZoom = false;
+      s.transients.lensPulse = false;
+      s.transients.slice = false;
+      s.transients.strobe = false;
+      s.memory.smear = 0.1;
+      s.generator.morphRate = 0.6;
+    },
+  },
+  {
     id: 'calm-background',
     name: 'Спокойный фон',
     apply: (s) => {
@@ -392,6 +563,7 @@ export function mergeSettings(saved: unknown): Settings {
   mergeSection(base.audio, source.audio);
   mergeSection(base.camera, source.camera);
   mergeSection(base.generator, source.generator);
+  mergeSection(base.focus, source.focus);
   mergeSection(base.motion, source.motion);
   mergeSection(base.quality, source.quality);
   mergeSection(base.transients, source.transients);
@@ -410,6 +582,31 @@ export function mergeSettings(saved: unknown): Settings {
     }
   }
   if (typeof source.debug === 'boolean') base.debug = source.debug;
+  if (typeof source.advanced === 'boolean') base.advanced = source.advanced;
+
+  // Параметры примитивов — отдельно: их надо и дополнить дефолтами, и обрезать
+  // по допустимому диапазону, иначе сохранённое значение из расширенного
+  // режима останется жить и после того, как режим выключили.
+  if (isRecord(source.primitives)) {
+    for (const id of ALL_PRIMITIVE_IDS) {
+      const saved = source.primitives[id];
+      if (!isRecord(saved)) continue;
+      const target = base.primitives[id];
+      if (typeof saved.enabled === 'boolean') target.enabled = saved.enabled;
+      if (saved.role === 'auto' || saved.role === 'solo'
+        || saved.role === 'accent' || saved.role === 'background') {
+        target.role = saved.role;
+      }
+      target.params = resolvePrimitiveParams(
+        id,
+        isRecord(saved.params) ? (saved.params as Record<string, number>) : undefined,
+        base.advanced,
+      );
+    }
+  }
+  if (base.generator.solo !== null && !ALL_PRIMITIVE_IDS.includes(base.generator.solo)) {
+    base.generator.solo = null;
+  }
 
   base.generator.manual = base.generator.manual.filter((id) => ALL_PRIMITIVE_IDS.includes(id));
   if (base.generator.manual.length === 0) base.generator.manual = ['flow-field'];
