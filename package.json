@@ -1,0 +1,23 @@
+{
+  "name": "soundvision",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "description": "Audio-reactive generative visualizer for the TV screen",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host",
+    "typecheck": "tsc --noEmit",
+    "bridge": "tsx bridge-server/server.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "@types/ws": "^8.5.13"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "SoundVision — YouTube Music Bridge",
+  "version": "2.0.0",
+  "description": "Отдаёт визуализатору SoundVision название, артиста, обложку и позицию трека из YouTube Music.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://music.youtube.com/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
