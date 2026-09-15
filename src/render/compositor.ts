@@ -163,8 +163,10 @@ export class Compositor {
       ctx.drawImage(this.base.canvas, 0, 0);
     }
     if (settings.layers.genre.enabled) {
-      // Жанровый и транзиентный слои — свечение: их складываем, а не кладём поверх.
-      ctx.globalCompositeOperation = 'lighter';
+      // 'screen' вместо 'lighter': жанровый слой светится, но плавно упирается
+      // в единицу, а не выбивает кадр в белое на дропе. Транзиентам ниже
+      // сложение оставлено — им как раз положено бить.
+      ctx.globalCompositeOperation = 'screen';
       ctx.globalAlpha = clamp01(settings.layers.genre.weight);
       ctx.drawImage(this.genre.canvas, 0, 0);
     }

@@ -87,7 +87,7 @@ export class VoronoiPrimitive implements DrawPrimitive {
     const ctx = frame.ctx;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = (0.32 + frame.mood.energy * 0.45) * frame.weight;
+    ctx.globalAlpha = (0.24 + frame.mood.energy * 0.3) * frame.weight;
     ctx.imageSmoothingEnabled = true;
     // 'medium' достаточно: поле и так растягивается в 7-8 раз из мягкой картинки,
     // а 'high' на слабой встроенной графике заметно дороже.

@@ -118,7 +118,8 @@ void main() {
     vec3 p = origin + dir * travelled;
     float d = map(p);
     // Мягкое свечение копится у поверхности — объём без второго прохода.
-    glow += 0.012 / (0.02 + abs(d));
+    // Вклад одного шага ограничен: у самой поверхности 1/d уходит в бесконечность.
+    glow += min(0.05, 0.012 / (0.02 + abs(d)));
     if (d < SURFACE_DIST) { hit = true; break; }
     travelled += d;
     if (travelled > MAX_DIST) break;
@@ -139,7 +140,11 @@ void main() {
     color *= 1.0 - depth * 0.55;
   }
 
-  color += uColorC * glow * (0.05 + uEnergy * 0.12);
+  color += uColorC * min(glow, 1.5) * (0.04 + uEnergy * 0.08);
+
+  // Тон-маппинг Рейнхарда: слой кладётся в композицию через 'lighter',
+  // поэтому значения выше единицы выбивают кадр в белое — ограничиваем здесь.
+  color = color / (1.0 + color);
   fragColor = vec4(color, 1.0);
 }`;
 
@@ -225,7 +230,7 @@ export class RaymarchPrimitive implements DrawPrimitive {
     const ctx = frame.ctx;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = (0.5 + mood.energy * 0.4) * frame.weight;
+    ctx.globalAlpha = (0.34 + mood.energy * 0.28) * frame.weight;
     ctx.drawImage(canvas, 0, 0, this.width, this.height);
     ctx.restore();
   }

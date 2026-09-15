@@ -98,7 +98,7 @@ export class CellularPrimitive implements DrawPrimitive {
     const ctx = frame.ctx;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = (0.3 + mood.energy * 0.45) * frame.weight;
+    ctx.globalAlpha = (0.22 + mood.energy * 0.3) * frame.weight;
     // Мягкий upscale на низком sharpness даёт «органику», жёсткий — пиксель-арт.
     ctx.imageSmoothingEnabled = params.sharpness < 0.6;
     ctx.drawImage(canvas, 0, 0, this.width, this.height);
@@ -157,7 +157,7 @@ export class CellularPrimitive implements DrawPrimitive {
       for (let x = 0; x < this.cols; x++) {
         const index = y * this.cols + x;
         const heat = this.heat[index] = this.heat[index] * cool;
-        const intensity = Math.min(1, heat * (0.55 + mood.energy * 0.75));
+        const intensity = Math.min(1, heat * (0.35 + mood.energy * 0.45));
         const offset = index * 4;
         data[offset] = band[0] * intensity;
         data[offset + 1] = band[1] * intensity;

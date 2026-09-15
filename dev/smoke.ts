@@ -6,6 +6,8 @@
  * друг от друга (пункт «с проверкой на разнообразие» из плана).
  *
  * Открывается на `npm run dev` по адресу /dev/smoke.html.
+ * `?only=voronoi&section=drop` — держать одну пару бесконечно, чтобы
+ * разглядеть конкретный примитив.
  * В прод-сборку не попадает: Vite собирает только index.html.
  */
 
@@ -50,9 +52,20 @@ compositor.resize(window.innerWidth, window.innerHeight, 1);
 const settings = defaultSettings();
 settings.generator.mode = 'manual';
 
+const params = new URLSearchParams(window.location.search);
+const only = params.get('only') as PrimitiveId | null;
+const onlySection = (params.get('section') as Section | null) ?? 'steady';
+/** В режиме `?only=` стадия одна и живёт бесконечно — это ручной осмотр. */
+const held = only !== null && ALL_PRIMITIVE_IDS.includes(only);
+const framesPerStage = held ? Number.POSITIVE_INFINITY : FRAMES_PER_STAGE;
+
 const stages: Array<{ primitive: PrimitiveId; section: Section }> = [];
-for (const primitive of ALL_PRIMITIVE_IDS) {
-  for (const section of SECTIONS) stages.push({ primitive, section });
+if (held && only) {
+  stages.push({ primitive: only, section: onlySection });
+} else {
+  for (const primitive of ALL_PRIMITIVE_IDS) {
+    for (const section of SECTIONS) stages.push({ primitive, section });
+  }
 }
 
 let stageIndex = 0;
@@ -119,9 +132,13 @@ function frame(timestamp: number): void {
 
   report.frames++;
   frameInStage++;
-  label.textContent = `${stage.primitive} / ${stage.section} — ${frameInStage}/${FRAMES_PER_STAGE}`;
+  label.textContent = held
+    ? `${stage.primitive} / ${stage.section} — кадр ${frameInStage}`
+    : `${stage.primitive} / ${stage.section} — ${frameInStage}/${FRAMES_PER_STAGE}`;
+  // В режиме осмотра отмечаемся «готовы» после прогрева, но рисовать продолжаем.
+  if (held && frameInStage > 40) report.done = true;
 
-  if (frameInStage >= FRAMES_PER_STAGE) {
+  if (frameInStage >= framesPerStage) {
     report.stages.push({
       primitive: stage.primitive,
       section: stage.section,
