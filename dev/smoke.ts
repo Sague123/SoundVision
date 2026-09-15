@@ -25,11 +25,13 @@ const FRAMES_PER_STAGE = 45;
 interface SmokeReport {
   done: boolean;
   frames: number;
+  /** В скольких кадрах реально отработал проход искажения. */
+  warpFrames: number;
   errors: string[];
   stages: Array<{ primitive: PrimitiveId; section: Section; avgFrameMs: number; rendered: string[] }>;
 }
 
-const report: SmokeReport = { done: false, frames: 0, errors: [], stages: [] };
+const report: SmokeReport = { done: false, frames: 0, warpFrames: 0, errors: [], stages: [] };
 (window as unknown as { __smoke: SmokeReport }).__smoke = report;
 
 window.addEventListener('error', (event) => report.errors.push(String(event.message)));
@@ -124,6 +126,7 @@ function frame(timestamp: number): void {
       url: '', image: null, colors: [],
     });
     frameMsTotal += stats.frameMs;
+    if (stats.warpActive) report.warpFrames++;
     for (const id of stats.activePrimitives) renderedInStage.add(id);
   } catch (err) {
     report.errors.push(`${stage.primitive}/${stage.section}: ${(err as Error).message}`);

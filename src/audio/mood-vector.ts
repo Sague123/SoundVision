@@ -6,9 +6,12 @@
 import type { AudioCapture } from './capture.ts';
 import { BeatTracker } from './beat-tracker.ts';
 import { ChromaAnalyzer, type KeyEstimate } from './chroma.ts';
-import { DEFAULT_FEATURE_CONFIG, FeatureExtractor, type FeatureConfig, type Section } from './features.ts';
+import {
+  DEFAULT_FEATURE_CONFIG, FeatureExtractor, SILENT_PROFILE,
+  type BandProfile, type FeatureConfig, type Section,
+} from './features.ts';
 
-export type { Section } from './features.ts';
+export type { Section, BandProfile } from './features.ts';
 export type { KeyEstimate } from './chroma.ts';
 
 export interface MoodVector {
@@ -30,6 +33,10 @@ export interface MoodVector {
   section: Section;
   /** Наклон энергии в окне тренда, -1..1. */
   energySlope: number;
+  /** Сглаженная энергия по полосам: низ / середина / верх. */
+  bands: BandProfile;
+  /** Частотный профиль текущего удара; нули, если удара нет. */
+  onsetProfile: BandProfile;
   chroma: Float32Array;
   silent: boolean;
   timeMs: number;
@@ -84,6 +91,8 @@ export class MoodEngine {
       key,
       section: raw.section,
       energySlope: raw.energySlope,
+      bands: raw.bands,
+      onsetProfile: raw.onsetProfile,
       chroma,
       silent: raw.silent,
       timeMs: nowMs,
@@ -107,6 +116,8 @@ export function idleMood(timeMs = 0): MoodVector {
     key: { tonic: 'C', mode: 'major', confidence: 0 },
     section: 'calm',
     energySlope: 0,
+    bands: { ...SILENT_PROFILE },
+    onsetProfile: { ...SILENT_PROFILE },
     chroma: new Float32Array(12),
     silent: true,
     timeMs,

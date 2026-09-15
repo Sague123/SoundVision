@@ -13,7 +13,8 @@ import { GenreLayer } from './layer-genre.ts';
 import { TransientLayer, type TransientDebug } from './layer-transient.ts';
 import { findHarmony, PaletteEngine, type HarmonyScheme, type Palette } from './palette.ts';
 import type { PrimitiveId, RenderFrame } from './primitives/types.ts';
-import { Scene, type SceneState } from './scene.ts';
+import { Scene, type SceneConfig, type SceneState } from './scene.ts';
+import { WarpPass } from './warp-pass.ts';
 import { trackKey } from './seed.ts';
 
 export interface CompositorStats {
@@ -22,6 +23,8 @@ export interface CompositorStats {
   activePrimitives: PrimitiveId[];
   baseId: PrimitiveId;
   transient: TransientDebug;
+  /** Отработал ли проход искажения в этом кадре. */
+  warpActive: boolean;
   palette: Palette;
   scene: SceneState;
   effectiveQuality: number;
@@ -45,6 +48,14 @@ export class Compositor {
   private readonly generator: Generator;
   private readonly paletteEngine = new PaletteEngine();
   private readonly scene = new Scene();
+  private readonly warp = new WarpPass();
+
+  /**
+   * Слои сводятся сюда, а не сразу на экран: варп читает сведённый кадр
+   * текстурой, а из самого себя канвас читать нельзя.
+   */
+  private readonly composed = document.createElement('canvas');
+  private readonly composedCtx: CanvasRenderingContext2D;
 
   private width = 1;
   private height = 1;
@@ -54,11 +65,20 @@ export class Compositor {
   private fps = 60;
   private effectiveQuality = 0.5;
   private lastQualityCheckMs = 0;
+  /**
+   * Варп — полноэкранный проход плюс две копии кадра. Если разрешение
+   * шейдера уже на минимуме, а fps всё равно не вытягивает, отключаем его:
+   * лучше без деформаций, но плавно.
+   */
+  private warpAllowed = true;
+  private lowFpsStreak = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
-    if (!ctx) throw new Error('2D-контекст недоступен');
+    const composedCtx = this.composed.getContext('2d', { alpha: false });
+    if (!ctx || !composedCtx) throw new Error('2D-контекст недоступен');
     this.ctx = ctx;
+    this.composedCtx = composedCtx;
     this.generator = new Generator(trackKey(null, null));
     this.reseedLayers();
   }
@@ -82,9 +102,12 @@ export class Compositor {
     this.canvas.style.width = `${cssWidth}px`;
     this.canvas.style.height = `${cssHeight}px`;
 
+    this.composed.width = this.width;
+    this.composed.height = this.height;
     this.base.resize(this.width, this.height);
     this.genre.resize(this.width, this.height);
     this.transient.resize(this.width, this.height);
+    this.warp.resize(this.width, this.height);
   }
 
   /** @returns true, если seed сменился и слои были переинициализированы. */
@@ -104,7 +127,7 @@ export class Compositor {
     const harmony = this.activeHarmony(settings);
 
     // Сцена идёт первой: от неё зависят и палитра, и набор примитивов, и камера.
-    const scene = this.scene.update(mood, clamp01(settings.transients.intensity));
+    const scene = this.scene.update(mood, sceneConfig(settings));
     const palette = this.buildPalette(mood, settings, cover, harmony);
     this.lastPalette = palette;
 
@@ -127,10 +150,10 @@ export class Compositor {
     this.transient.update(mood, settings, scene);
     const transientDebug = settings.layers.transient.enabled
       ? this.transient.render(palette, scene, clamp01(settings.layers.transient.weight))
-      : { particles: 0, rings: 0, glitch: false, flash: 0 };
+      : { particles: 0, rings: 0, flash: 0 };
 
     this.compose(settings, scene);
-    if (settings.layers.transient.enabled) this.transient.applyGlitch(this.ctx, mood, settings);
+    const warped = this.applyWarp(scene);
 
     const frameMs = performance.now() - started;
     this.trackFps(mood.deltaMs);
@@ -141,6 +164,7 @@ export class Compositor {
       activePrimitives,
       baseId: state.baseId,
       transient: transientDebug,
+      warpActive: warped,
       palette,
       scene,
       effectiveQuality: this.effectiveQuality,
@@ -152,6 +176,7 @@ export class Compositor {
   dispose(): void {
     this.base.dispose();
     this.genre.dispose();
+    this.warp.dispose();
   }
 
   /**
@@ -160,32 +185,35 @@ export class Compositor {
    * преобразованием, поверх которого ложится толчок от импульса.
    */
   private compose(settings: Settings, scene: SceneState): void {
-    const ctx = this.ctx;
+    const ctx = this.composedCtx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = 1;
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, this.width, this.height);
 
-    const shake = settings.layers.transient.enabled ? this.transient.shake : { x: 0, y: 0 };
     const minSide = Math.min(this.width, this.height);
     const camera = settings.camera.enabled ? scene.camera : IDLE_CAMERA;
     const amount = clamp01(settings.camera.amount);
 
-    const offsetX = camera.x * minSide * amount + shake.x;
-    const offsetY = camera.y * minSide * amount + shake.y;
+    // Тряска входит в смещение камеры: это её толчок, а не отдельный эффект.
+    const offsetX = camera.x * minSide * amount;
+    const offsetY = camera.y * minSide * amount;
     const roll = camera.roll * amount;
     const shakeMargin = Math.max(Math.abs(offsetX), Math.abs(offsetY)) / minSide;
     // Кадр должен покрыть себя после поворота и сдвига, иначе по краям чернота.
     const overscale = coverScale(this.width, this.height, roll) * (1 + shakeMargin * 2.2);
     const scale = Math.max(1, camera.zoom * amount + (1 - amount)) * overscale;
+    // Сжатие по вертикали компенсируем растяжением по горизонтали: кадр
+    // «придавливает», а не уменьшает.
+    const squash = 1 - (1 - camera.squash) * amount;
 
     const cx = this.width / 2;
     const cy = this.height / 2;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.translate(cx + offsetX, cy + offsetY);
     ctx.rotate(roll);
-    ctx.scale(scale, scale);
+    ctx.scale(scale / squash, scale * squash);
     ctx.translate(-cx, -cy);
 
     if (settings.layers.base.enabled) {
@@ -219,6 +247,25 @@ export class Compositor {
       : settings.palette.harmonyId);
   }
 
+  /**
+   * Проход искажения и перенос кадра на экран.
+   * @returns отработал ли варп; false — кадр ушёл на экран как есть.
+   */
+  private applyWarp(scene: SceneState): boolean {
+    const ctx = this.ctx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+
+    const idle = WarpPass.isIdle(scene.deformation, scene.impact);
+    const output = idle || !this.warpAllowed || !this.warp.available
+      ? null
+      : this.warp.render(this.composed, scene.deformation, scene.impact);
+
+    ctx.drawImage(output ?? this.composed, 0, 0, this.width, this.height);
+    return output !== null;
+  }
+
   private buildPalette(
     mood: MoodVector,
     settings: Settings,
@@ -249,8 +296,18 @@ export class Compositor {
       this.lastQualityCheckMs = nowMs;
       if (this.fps < FPS_FLOOR) {
         this.effectiveQuality = Math.max(QUALITY_MIN, this.effectiveQuality - QUALITY_STEP);
-      } else if (this.fps > FPS_CEILING && this.effectiveQuality < target) {
-        this.effectiveQuality = Math.min(target, this.effectiveQuality + QUALITY_STEP);
+        this.lowFpsStreak++;
+        // Снимаем варп только когда снижать уже нечего и провал устойчивый.
+        if (this.effectiveQuality <= QUALITY_MIN && this.lowFpsStreak >= 3) this.warpAllowed = false;
+      } else if (this.fps > FPS_CEILING) {
+        this.lowFpsStreak = 0;
+        if (this.effectiveQuality < target) {
+          this.effectiveQuality = Math.min(target, this.effectiveQuality + QUALITY_STEP);
+        } else {
+          this.warpAllowed = true;
+        }
+      } else {
+        this.lowFpsStreak = 0;
       }
     }
     this.effectiveQuality = Math.min(this.effectiveQuality, target);
@@ -273,7 +330,7 @@ export class Compositor {
 }
 
 /** Камера в покое: ею подменяется сцена, когда камера выключена в настройках. */
-const IDLE_CAMERA = { x: 0, y: 0, zoom: 1, roll: 0 } as const;
+const IDLE_CAMERA = { x: 0, y: 0, zoom: 1, roll: 0, squash: 1 } as const;
 
 /**
  * Минимальный масштаб, при котором повёрнутый кадр всё ещё накрывает экран.
@@ -286,4 +343,23 @@ function coverScale(width: number, height: number, roll: number): number {
     (width * cos + height * sin) / width,
     (height * cos + width * sin) / height,
   );
+}
+
+/** Разрешения для сцены собираются из настроек здесь: сцена в Settings не лезет. */
+function sceneConfig(settings: Settings): SceneConfig {
+  const t = settings.transients;
+  return {
+    intensity: clamp01(t.intensity),
+    shake: t.shake,
+    shockwave: t.shockwave,
+    ripple: t.ripple,
+    punchZoom: t.punchZoom,
+    lensPulse: t.lensPulse,
+    rollKick: t.rollKick,
+    compression: t.compression,
+    chromaticBurst: t.chromaticBurst,
+    slice: t.slice,
+    pressureWave: t.pressureWave,
+    deformation: settings.deformation.enabled ? clamp01(settings.deformation.amount) : 0,
+  };
 }

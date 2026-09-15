@@ -5,7 +5,7 @@
 
 import type { MoodVector } from '../audio/mood-vector.ts';
 import type { CompositorStats } from '../render/compositor.ts';
-import { SUBSTANCE_LABELS } from '../render/scene.ts';
+import { IMPULSE_KIND_LABELS, SUBSTANCE_LABELS } from '../render/scene.ts';
 
 const HISTORY = 240;
 const GRAPH_HEIGHT = 34;
@@ -57,6 +57,8 @@ export class DebugOverlay {
     this.writeIndex = (this.writeIndex + 1) % HISTORY;
 
     this.drawGraphs();
+    // Самый свежий импульс: по нему видно, как классифицировался удар.
+    const lastImpulse = stats.scene.impulses[stats.scene.impulses.length - 1] ?? null;
     this.readout.textContent = [
       `fps      ${stats.fps.toFixed(1)}   кадр ${stats.frameMs.toFixed(1)} мс   quality ${(stats.effectiveQuality * 100).toFixed(0)}%`,
       `energy   ${bar(mood.energy)} ${mood.energy.toFixed(3)}`,
@@ -78,8 +80,19 @@ export class DebugOverlay {
       `палитра  ${stats.harmonyName}, оттенок ${stats.palette.hue.toFixed(0)}°`,
       `base     ${stats.baseId}`,
       `active   ${stats.activePrimitives.join(', ') || '—'}`,
-      `transient particles ${stats.transient.particles} rings ${stats.transient.rings}` +
-        `${stats.transient.glitch ? ' glitch' : ''}`,
+      `частицы  ${stats.transient.particles} кольца ${stats.transient.rings}` +
+        ` вспышка ${stats.transient.flash.toFixed(2)}`,
+      `импакт   волн ${stats.scene.impact.shockwaves.length} ряби ${stats.scene.impact.ripples.length}` +
+        ` линза ${stats.scene.impact.lensPulse.toFixed(2)} RGB ${stats.scene.impact.chromaticBurst.toFixed(2)}` +
+        ` блоки ${stats.scene.impact.slice.toFixed(2)} давл ${stats.scene.impact.pressure.toFixed(2)}`,
+      `деформ   warp ${stats.scene.deformation.domainWarp.toFixed(2)} twist ${stats.scene.deformation.twist.toFixed(2)}` +
+        ` wave ${stats.scene.deformation.wave.toFixed(2)} turb ${stats.scene.deformation.turbulence.toFixed(2)}` +
+        ` melt ${stats.scene.deformation.melt.toFixed(2)} fold ${stats.scene.deformation.fold.toFixed(2)}` +
+        ` ${stats.warpActive ? '[варп]' : '[пропуск]'}`,
+      `полосы   низ ${bar(mood.bands.low, 6)} сер ${bar(mood.bands.mid, 6)} верх ${bar(mood.bands.high, 6)}`,
+      `удар     ${lastImpulse ? `${IMPULSE_KIND_LABELS[lastImpulse.kind]} сила ${lastImpulse.strength.toFixed(2)}` +
+        ` профиль ${lastImpulse.profile.low.toFixed(2)}/${lastImpulse.profile.mid.toFixed(2)}/${lastImpulse.profile.high.toFixed(2)}` +
+        `${lastImpulse.echo ? ' (эхо)' : ''}` : '—'}`,
       `seed     ${stats.seedLabel}`,
     ].join('\n');
   }
@@ -125,7 +138,7 @@ export class DebugOverlay {
   }
 }
 
-function bar(value: number): string {
-  const filled = Math.round(Math.min(1, Math.max(0, value)) * 16);
-  return `${'█'.repeat(filled)}${'·'.repeat(16 - filled)}`;
+function bar(value: number, width = 16): string {
+  const filled = Math.round(Math.min(1, Math.max(0, value)) * width);
+  return `${'█'.repeat(filled)}${'·'.repeat(width - filled)}`;
 }

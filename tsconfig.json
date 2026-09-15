@@ -3,7 +3,11 @@
     "target": "ES2022",
     "useDefineForClassFields": true,
     "module": "ESNext",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "skipLibCheck": true,
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
@@ -15,7 +19,14 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "exactOptionalPropertyTypes": false,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src", "bridge-server", "vite.config.ts"]
+  "include": [
+    "src",
+    "dev",
+    "bridge-server",
+    "vite.config.ts"
+  ]
 }

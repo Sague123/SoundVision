@@ -8,6 +8,22 @@
 
 export type Section = 'buildup' | 'drop' | 'calm' | 'steady';
 
+/**
+ * Разбиение спектра на три полосы. Границы выбраны по тому, что в них живёт:
+ * бочка и бас до 180 Гц, малый барабан и основная гармония до 2.2 кГц,
+ * хай-хэты и «воздух» выше.
+ */
+export const BAND_EDGES_HZ = { lowMid: 180, midHigh: 2200 } as const;
+
+/** Распределение энергии (или силы удара) по трём полосам, каждая 0..1. */
+export interface BandProfile {
+  low: number;
+  mid: number;
+  high: number;
+}
+
+export const SILENT_PROFILE: BandProfile = { low: 0, mid: 0, high: 0 };
+
 export interface FeatureConfig {
   /** Коэффициент экспоненциального сглаживания, 0 — без инерции, 0.95 — очень вязко. */
   smoothing: number;
@@ -43,6 +59,13 @@ export interface RawFeatures {
   section: Section;
   /** Позиция энергии внутри окна тренда, -1..1: растёт или падает. */
   energySlope: number;
+  /** Сглаженная энергия по полосам — на ней живут постоянные деформации. */
+  bands: BandProfile;
+  /**
+   * Частотный профиль удара: какой полосе он принадлежит. Нули вне кадра
+   * с onset'ом. Именно этим бас-бочка отличается от хай-хэта.
+   */
+  onsetProfile: BandProfile;
   silent: boolean;
 }
 
@@ -101,6 +124,28 @@ export class FeatureExtractor {
   private readonly energyNorm = new AdaptiveNormalizer(0.9995, 0.01);
   private readonly fluxNorm = new AdaptiveNormalizer(0.999, 0.02);
 
+  /**
+   * У каждой полосы свой нормализатор: хай-хэт по абсолютной магнитуде всегда
+   * проигрывает бочке, и без раздельной нормализации профиль удара был бы
+   * всегда «низ».
+   */
+  private readonly bandFluxNorm = [
+    new AdaptiveNormalizer(0.999, 0.01),
+    new AdaptiveNormalizer(0.999, 0.01),
+    new AdaptiveNormalizer(0.999, 0.01),
+  ];
+  private readonly bandEnergyNorm = [
+    new AdaptiveNormalizer(0.9995, 0.005),
+    new AdaptiveNormalizer(0.9995, 0.005),
+    new AdaptiveNormalizer(0.9995, 0.005),
+  ];
+  private readonly bandSm = [new Smoother(), new Smoother(), new Smoother()];
+  /** Границы полос в индексах бинов — считаются один раз. */
+  private readonly lowMidBin: number;
+  private readonly midHighBin: number;
+  /** Нормализованный flux по полосам в текущем кадре. */
+  private readonly bandFlux: BandProfile = { low: 0, mid: 0, high: 0 };
+
   /** Недавние значения flux — из них считается адаптивный порог onset'а. */
   private readonly fluxHistory: number[] = [];
   private lastOnsetAt = -Infinity;
@@ -119,6 +164,8 @@ export class FeatureExtractor {
     this.prevSpectrum = new Float32Array(bins);
     this.timeDomain = new Float32Array(analyser.fftSize);
     this.binHz = sampleRate / analyser.fftSize;
+    this.lowMidBin = Math.min(bins, Math.round(BAND_EDGES_HZ.lowMid / this.binHz));
+    this.midHighBin = Math.min(bins, Math.round(BAND_EDGES_HZ.midHigh / this.binHz));
   }
 
   /** @param nowMs — время кадра, `performance.now()`. */
@@ -132,6 +179,9 @@ export class FeatureExtractor {
     let magnitudeSum = 0;
     let weightedSum = 0;
     let flux = 0;
+    const rawBandFlux = [0, 0, 0];
+    const rawBandEnergy = [0, 0, 0];
+
     for (let i = 0; i < bins; i++) {
       // dB → линейная магнитуда; -100 dB это наш пол тишины.
       const magnitude = this.freqDb[i] <= -100 ? 0 : Math.pow(10, this.freqDb[i] / 20);
@@ -140,6 +190,10 @@ export class FeatureExtractor {
       weightedSum += magnitude * i * this.binHz;
       const diff = magnitude - this.prevSpectrum[i];
       if (diff > 0) flux += diff; // half-wave rectification: интересны только нарастания
+
+      const band = i < this.lowMidBin ? 0 : i < this.midHighBin ? 1 : 2;
+      rawBandEnergy[band] += magnitude;
+      if (diff > 0) rawBandFlux[band] += diff;
     }
 
     let sumSquares = 0;
@@ -165,6 +219,15 @@ export class FeatureExtractor {
     const fluxNormalized = this.fluxNorm.normalize(flux);
     const fluxSmoothed = clamp01(this.fluxSm.update(fluxNormalized, k * 0.6) * config.fluxGain);
 
+    const bands: BandProfile = {
+      low: clamp01(this.bandSm[0].update(this.bandEnergyNorm[0].normalize(rawBandEnergy[0]), k)),
+      mid: clamp01(this.bandSm[1].update(this.bandEnergyNorm[1].normalize(rawBandEnergy[1]), k)),
+      high: clamp01(this.bandSm[2].update(this.bandEnergyNorm[2].normalize(rawBandEnergy[2]), k)),
+    };
+    this.bandFlux.low = this.bandFluxNorm[0].normalize(rawBandFlux[0]);
+    this.bandFlux.mid = this.bandFluxNorm[1].normalize(rawBandFlux[1]);
+    this.bandFlux.high = this.bandFluxNorm[2].normalize(rawBandFlux[2]);
+
     const { onset, onsetStrength } = this.detectOnset(fluxNormalized, nowMs, config, silent);
     const { section, energySlope } = this.updateTrend(energy, nowMs, silent);
 
@@ -178,6 +241,9 @@ export class FeatureExtractor {
       onsetStrength,
       section,
       energySlope,
+      bands,
+      // Профиль имеет смысл только в кадре удара: между ударами он шум.
+      onsetProfile: onset ? normalizeProfile(this.bandFlux) : SILENT_PROFILE,
       silent,
     };
   }
@@ -254,6 +320,13 @@ function average(values: number[], from: number, to: number): number {
   let sum = 0;
   for (let i = from; i < to; i++) sum += values[i];
   return sum / (to - from);
+}
+
+/** Профиль приводится к максимуму 1: важны пропорции полос, не их громкость. */
+function normalizeProfile(profile: BandProfile): BandProfile {
+  const peak = Math.max(profile.low, profile.mid, profile.high);
+  if (peak <= 1e-6) return SILENT_PROFILE;
+  return { low: profile.low / peak, mid: profile.mid / peak, high: profile.high / peak };
 }
 
 export function clamp01(value: number): number {

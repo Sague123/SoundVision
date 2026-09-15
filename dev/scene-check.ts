@@ -11,12 +11,18 @@ import { tonicHue } from '../src/render/color/harmony.ts';
 import { findHarmony } from '../src/render/palette.ts';
 import { PaletteEngine, defaultTuning } from '../src/render/palette.ts';
 import { Generator } from '../src/render/generator.ts';
-import { Scene } from '../src/render/scene.ts';
+import {
+  Scene, classifyImpulse, defaultSceneConfig, type ImpulseKind,
+} from '../src/render/scene.ts';
+import { WarpPass } from '../src/render/warp-pass.ts';
 import { defaultSettings } from '../src/settings.ts';
 import { makeSeed } from '../src/render/seed.ts';
 import type { NoteName } from '../src/audio/chroma.ts';
+import type { BandProfile } from '../src/audio/features.ts';
 
 const FRAME_MS = 1000 / 60;
+/** Все эффекты разрешены на полную: проверки смотрят механику, а не вкус. */
+const SCENE_CONFIG = { ...defaultSceneConfig(), intensity: 1, deformation: 1 };
 let failures = 0;
 
 function check(name: string, condition: boolean, detail: string): void {
@@ -47,7 +53,7 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
       onsetStrength: frame === 0 ? 0.9 : 0,
       energy: 0.5,
     });
-    const state = scene.update(mood, 1);
+    const state = scene.update(mood, SCENE_CONFIG);
     for (const impulse of state.impulses) {
       if (impulse.id > seen) {
         seen = impulse.id;
@@ -80,7 +86,7 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
   const scene = new Scene();
   scene.reseed(makeSeed('проверка вещества'));
 
-  let previous = scene.update(moodAt(0, { noisiness: 0, brightness: 0 }), 1).substance.axis;
+  let previous = scene.update(moodAt(0, { noisiness: 0, brightness: 0 }), SCENE_CONFIG).substance.axis;
   let worstJump = 0;
 
   for (let frame = 1; frame < 240; frame++) {
@@ -93,7 +99,7 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
         energy: loud ? 0.9 : 0.05,
         section: loud ? 'drop' : 'calm',
       }),
-      1,
+      SCENE_CONFIG,
     );
     worstJump = Math.max(worstJump, Math.abs(state.substance.axis - previous));
     previous = state.substance.axis;
@@ -194,7 +200,7 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
       const mood = moodAt(frame * FRAME_MS, quiet
         ? { noisiness: 0.02, brightness: 0.05, energy: 0.12, section: 'calm' }
         : { noisiness: 0.95, brightness: 0.9, energy: 0.9, section: 'drop' });
-      const state = generator.update(mood, settings, scene.update(mood, 1));
+      const state = generator.update(mood, settings, scene.update(mood, SCENE_CONFIG));
       weights = state.weights as Map<string, number>;
     }
     return [...weights.entries()].sort((a, b) => b[1] - a[1])[0][0];
@@ -204,6 +210,238 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
   const loudLeader = leaderFor(false);
   check('в тишине ведёт «туманный» примитив', quietLeader === 'flow-field', `ведёт ${quietLeader}`);
   check('на шумном пике ведёт «плазменный»', loudLeader === 'raymarch', `ведёт ${loudLeader}`);
+}
+
+// --- 6. Классификация удара по частотному профилю ----------------------------
+{
+  const cases: Array<[string, BandProfile, ImpulseKind]> = [
+    ['бочка', { low: 1, mid: 0.3, high: 0.1 }, 'bass'],
+    ['снейр', { low: 0.3, mid: 1, high: 0.5 }, 'snare'],
+    ['хай-хэт', { low: 0.1, mid: 0.4, high: 1 }, 'hat'],
+    ['широкополосный', { low: 0.9, mid: 1, high: 0.95 }, 'broad'],
+  ];
+  for (const [name, profile, expected] of cases) {
+    const actual = classifyImpulse(profile);
+    check(`профиль «${name}»`, actual === expected, `ожидали ${expected}, получили ${actual}`);
+  }
+}
+
+// --- 7. Лестница эффектов по силе удара --------------------------------------
+{
+  /**
+   * Прогоняет один удар заданной силы и возвращает, что успело сработать.
+   *
+   * `substance` прогревает вещество до нужного места на оси: рябь по спеке —
+   * отклик именно жидкого вещества, на тумане её быть не должно.
+   * Flux держим постоянным: его скачок — самостоятельный источник импульса,
+   * и он бы перебил ту силу удара, которую мы here проверяем.
+   */
+  const fire = (
+    strength: number,
+    profile: BandProfile,
+    drop: boolean,
+    substance: Partial<MoodVector> = {},
+  ) => {
+    const scene = new Scene();
+    scene.reseed(makeSeed(`лестница ${strength}`));
+    // Прогрев: 4 секунды, чтобы ось вещества успела доехать (её постоянная 1.6 с).
+    for (let frame = 0; frame < 240; frame++) {
+      scene.update(moodAt(frame * FRAME_MS, { energy: 0.4, flux: 0.2, ...substance }), SCENE_CONFIG);
+    }
+
+    let peak = {
+      shockwaves: 0, ripples: 0, lens: 0, chromatic: 0, slice: 0, pressure: 0, shake: 0,
+    };
+    for (let frame = 240; frame < 290; frame++) {
+      const hit = frame === 241;
+      const state = scene.update(moodAt(frame * FRAME_MS, {
+        energy: drop ? 0.9 : 0.4,
+        flux: 0.4,
+        ...substance,
+        onset: hit,
+        onsetStrength: hit ? strength : 0,
+        onsetProfile: hit ? profile : { low: 0, mid: 0, high: 0 },
+        section: drop ? 'drop' : 'steady',
+      }), SCENE_CONFIG);
+      peak = {
+        shockwaves: Math.max(peak.shockwaves, state.impact.shockwaves.length),
+        ripples: Math.max(peak.ripples, state.impact.ripples.length),
+        lens: Math.max(peak.lens, Math.abs(state.impact.lensPulse)),
+        chromatic: Math.max(peak.chromatic, state.impact.chromaticBurst),
+        slice: Math.max(peak.slice, state.impact.slice),
+        pressure: Math.max(peak.pressure, state.impact.pressure),
+        shake: Math.max(peak.shake, Math.abs(state.camera.x) + Math.abs(state.camera.y)),
+      };
+    }
+    return peak;
+  };
+
+  const bass: BandProfile = { low: 1, mid: 0.2, high: 0.05 };
+  const weak = fire(0.18, bass, false);
+  check('слабый удар двигает камеру', weak.shake > 0, `сдвиг ${weak.shake.toFixed(4)}`);
+  check(
+    'слабый удар не запускает тяжёлые эффекты',
+    weak.shockwaves === 0 && weak.chromatic === 0 && weak.lens === 0,
+    `волн ${weak.shockwaves}, RGB ${weak.chromatic.toFixed(2)}, линза ${weak.lens.toFixed(2)}`,
+  );
+
+  const strong = fire(0.85, bass, false);
+  check('сильный бас даёт ударную волну', strong.shockwaves > 0, `волн ${strong.shockwaves}`);
+  check('сильный удар даёт линзу и разлёт каналов',
+    strong.lens > 0 && strong.chromatic > 0,
+    `линза ${strong.lens.toFixed(2)}, RGB ${strong.chromatic.toFixed(2)}`);
+
+  const drop = fire(0.9, bass, true);
+  check('дроп добавляет волну давления', drop.pressure > 0, `давление ${drop.pressure.toFixed(2)}`);
+
+  // Само существование лестницы: чем сильнее удар, тем больше эффектов разом.
+  const countActive = (p: typeof weak): number =>
+    (p.shockwaves > 0 ? 1 : 0) + (p.ripples > 0 ? 1 : 0) + (p.lens > 0 ? 1 : 0)
+    + (p.chromatic > 0 ? 1 : 0) + (p.slice > 0 ? 1 : 0) + (p.pressure > 0 ? 1 : 0);
+  const ladder = [countActive(weak), countActive(strong), countActive(drop)];
+  check(
+    'число одновременных эффектов растёт с силой удара',
+    ladder[0] < ladder[1] && ladder[1] <= ladder[2],
+    `слабый ${ladder[0]} → сильный ${ladder[1]} → дроп ${ladder[2]}`,
+  );
+
+  // Рябь — отклик жидкого вещества на средний удар, а не баса и не на тумане.
+  const liquid = { noisiness: 0.3, brightness: 0.35, energy: 0.45 };
+  const mid = fire(0.6, { low: 0.2, mid: 1, high: 0.4 }, false, liquid);
+  check('средний удар на жидком веществе даёт рябь, а не ударную волну',
+    mid.ripples > 0 && mid.shockwaves === 0,
+    `ряби ${mid.ripples}, волн ${mid.shockwaves}`);
+
+  const fog = { noisiness: 0.02, brightness: 0.05, energy: 0.15 };
+  const midOnFog = fire(0.6, { low: 0.2, mid: 1, high: 0.4 }, false, fog);
+  check('на тумане ряби нет', midOnFog.ripples === 0, `ряби ${midOnFog.ripples}`);
+}
+
+// --- 8. Направление тряски от частотного профиля -----------------------------
+{
+  /**
+   * Дрейф и орбита камеры детерминированы, а тряска — нет. Поэтому меряем
+   * разницу с прогоном при выключенной тряске: так остаётся только она.
+   */
+  const shakeOnly = (profile: BandProfile): { x: number; y: number } => {
+    const run = (shake: boolean): { x: number; y: number } => {
+      const scene = new Scene();
+      scene.reseed(makeSeed('тряска'));
+      const config = { ...SCENE_CONFIG, shake };
+      let x = 0;
+      let y = 0;
+      for (let frame = 0; frame < 600; frame++) {
+        const hit = frame % 12 === 0;
+        const state = scene.update(moodAt(frame * FRAME_MS, {
+          energy: 0.6,
+          flux: 0.3,
+          onset: hit,
+          onsetStrength: hit ? 0.9 : 0,
+          onsetProfile: hit ? profile : { low: 0, mid: 0, high: 0 },
+        }), config);
+        x += Math.abs(state.camera.x);
+        y += Math.abs(state.camera.y);
+      }
+      return { x, y };
+    };
+    const on = run(true);
+    const off = run(false);
+    return { x: Math.abs(on.x - off.x), y: Math.abs(on.y - off.y) };
+  };
+
+  const low = shakeOnly({ low: 1, mid: 0.2, high: 0.05 });
+  const high = shakeOnly({ low: 0.05, mid: 0.3, high: 1 });
+  const lowRatio = low.y / Math.max(1e-6, low.x);
+  const highRatio = high.y / Math.max(1e-6, high.x);
+  check(
+    'бас трясёт по вертикали, верх — во все стороны',
+    lowRatio > highRatio * 1.5,
+    `низ верт/гор ${lowRatio.toFixed(2)}, верх ${highRatio.toFixed(2)}`,
+  );
+}
+
+// --- 9. Punch zoom возвращается упруго ---------------------------------------
+{
+  const scene = new Scene();
+  scene.reseed(makeSeed('наезд'));
+  const zooms: number[] = [];
+  for (let frame = 0; frame < 120; frame++) {
+    // Смена секции на дроп — единственный триггер наезда.
+    const state = scene.update(moodAt(frame * FRAME_MS, {
+      energy: 0.85,
+      onset: frame === 30,
+      onsetStrength: frame === 30 ? 0.9 : 0,
+      onsetProfile: frame === 30 ? { low: 1, mid: 0.4, high: 0.2 } : { low: 0, mid: 0, high: 0 },
+      section: frame >= 30 ? 'drop' : 'steady',
+    }), SCENE_CONFIG);
+    if (frame >= 30) zooms.push(state.camera.zoom);
+  }
+  // Упругий возврат = немонотонность: наезд, перелёт и откат обратно.
+  let rises = 0;
+  let falls = 0;
+  for (let i = 1; i < zooms.length; i++) {
+    if (zooms[i] > zooms[i - 1] + 1e-5) rises++;
+    if (zooms[i] < zooms[i - 1] - 1e-5) falls++;
+  }
+  check('наезд возвращается упруго, а не просто нарастает',
+    rises > 0 && falls > 0, `рост ${rises} кадров, откат ${falls} кадров`);
+}
+
+// --- 10. Деформации: постоянный фон и рост на пиках --------------------------
+{
+  const sample = (overrides: Partial<MoodVector>, deformation: number) => {
+    const scene = new Scene();
+    scene.reseed(makeSeed('деформации'));
+    const config = { ...SCENE_CONFIG, deformation };
+    let last = scene.update(moodAt(0, overrides), config).deformation;
+    for (let frame = 1; frame < 300; frame++) {
+      last = scene.update(moodAt(frame * FRAME_MS, overrides), config).deformation;
+    }
+    return last;
+  };
+
+  const quiet = sample({ energy: 0.1, noisiness: 0.05, brightness: 0.1, section: 'calm' }, 1);
+  check(
+    'базовые деформации активны даже в тишине',
+    quiet.domainWarp > 0 && quiet.twist > 0 && quiet.wave > 0 && quiet.turbulence > 0,
+    `warp ${quiet.domainWarp.toFixed(3)}, twist ${quiet.twist.toFixed(3)}`,
+  );
+
+  const loud = sample({ energy: 0.95, noisiness: 0.9, brightness: 0.85, flux: 0.7, section: 'drop' }, 1);
+  check('на пике деформации усиливаются',
+    loud.domainWarp > quiet.domainWarp && loud.turbulence > quiet.turbulence,
+    `warp ${quiet.domainWarp.toFixed(3)} → ${loud.domainWarp.toFixed(3)}`);
+
+  const off = sample({ energy: 0.9, noisiness: 0.9 }, 0);
+  check('выключенные деформации действительно нулевые',
+    off.domainWarp === 0 && off.twist === 0 && off.fold === 0, `warp ${off.domainWarp}`);
+
+  // Стекание и складки условны по спеке: одно — про медленный минор, другое — про кристалл.
+  const melting = sample(
+    { energy: 0.12, bpm: 72, noisiness: 0.35, brightness: 0.3, key: { tonic: 'A', mode: 'minor', confidence: 1 } },
+    1,
+  );
+  // Порог не «больше нуля»: стекание должно быть видно, а не существовать формально.
+  check('стекание заметно на медленном миноре', melting.melt > 0.1, `melt ${melting.melt.toFixed(3)}`);
+  const major = sample(
+    { energy: 0.6, bpm: 150, key: { tonic: 'C', mode: 'major', confidence: 1 } },
+    1,
+  );
+  check('на быстром мажоре стекания нет', major.melt < 0.01, `melt ${major.melt.toFixed(3)}`);
+
+  const crystal = sample({ energy: 0.8, noisiness: 0.95, brightness: 0.95, section: 'drop' }, 1);
+  check('складки появляются на кристаллической части оси', crystal.fold > 0, `fold ${crystal.fold.toFixed(3)}`);
+}
+
+// --- 11. Варп пропускается, когда искажать нечего ----------------------------
+{
+  const scene = new Scene();
+  scene.reseed(makeSeed('покой'));
+  const config = { ...SCENE_CONFIG, deformation: 0 };
+  let state = scene.update(moodAt(0, {}), config);
+  for (let frame = 1; frame < 120; frame++) state = scene.update(moodAt(frame * FRAME_MS, {}), config);
+  check('без деформаций и ударов проход искажения пропускается',
+    WarpPass.isIdle(state.deformation, state.impact), 'варп всё ещё считает себя нужным');
 }
 
 console.log(failures === 0 ? '\nвсё сошлось' : `\nпроблем: ${failures}`);

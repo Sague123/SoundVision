@@ -269,22 +269,27 @@ export class SettingsPanel {
     ));
 
     this.body.append(section(
-      'Транзиенты',
-      this.track(toggle({
-        label: 'Particle burst', get: () => s.transients.burst, set: (v) => { s.transients.burst = v; },
-      })),
-      this.track(toggle({
-        label: 'Shockwave', get: () => s.transients.shockwave, set: (v) => { s.transients.shockwave = v; },
-      })),
-      this.track(toggle({
-        label: 'Glitch / datamosh', get: () => s.transients.glitch, set: (v) => { s.transients.glitch = v; },
-      })),
-      this.track(toggle({
-        label: 'Screen shake', get: () => s.transients.shake, set: (v) => { s.transients.shake = v; },
-      })),
-      this.track(toggle({
-        label: 'Strobe flash', get: () => s.transients.strobe, set: (v) => { s.transients.strobe = v; },
-      })),
+      'Импакт-эффекты',
+      note('Что сработает на конкретном ударе, решают его сила и частотный профиль: '
+        + 'слабый удар даёт только толчок камеры, дроп — почти всё сразу.'),
+      ...([
+        ['burst', 'Particle burst'],
+        ['shockwave', 'Shockwave (бас)'],
+        ['ripple', 'Ripple (жидкое вещество)'],
+        ['shake', 'Screen shake'],
+        ['punchZoom', 'Punch zoom (дроп)'],
+        ['lensPulse', 'Lens pulse'],
+        ['rollKick', 'Roll kick (снейр)'],
+        ['compression', 'Compression (кик)'],
+        ['chromaticBurst', 'Chromatic burst'],
+        ['slice', 'Slice displacement'],
+        ['pressureWave', 'Pressure wave (дроп)'],
+        ['strobe', 'Strobe flash'],
+      ] as const).map(([key, label]) => this.track(toggle({
+        label,
+        get: () => s.transients[key],
+        set: (v) => { s.transients[key] = v; },
+      }))),
       this.track(slider({
         label: 'Интенсивность', min: 0, max: 1, step: 0.01,
         get: () => s.transients.intensity, set: (v) => { s.transients.intensity = v; },
@@ -297,6 +302,23 @@ export class SettingsPanel {
         format: (v) => (v > 0 ? `${v} Гц` : 'выкл'),
       })),
       note(`Потолок ${MAX_SAFE_FLASH_HZ} Гц не снимается: это защита от фотосенситивной эпилепсии.`),
+    ));
+
+    this.body.append(section(
+      'Деформации вещества',
+      note('Domain warping, закручивание, волны, завихрения, стекание и складки. '
+        + 'Работают всегда на низком уровне и усиливаются на пиках.'),
+      this.track(toggle({
+        label: 'Деформации',
+        get: () => s.deformation.enabled,
+        set: (v) => { s.deformation.enabled = v; },
+      })),
+      this.track(slider({
+        label: 'Сила', min: 0, max: 1, step: 0.02,
+        get: () => s.deformation.amount,
+        set: (v) => { s.deformation.amount = v; },
+        format: (v) => `${Math.round(v * 100)}%`,
+      })),
     ));
 
     this.body.append(section(

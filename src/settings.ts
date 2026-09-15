@@ -49,15 +49,42 @@ export interface Settings {
     tuning: PaletteTuning;
   };
   transients: {
+    // Импакт-эффекты. Что именно сработает на конкретном ударе, решают его
+    // сила и частотный профиль — здесь только разрешение на каждый эффект.
+    /** Разлёт частиц из точки удара. */
     burst: boolean;
+    /** Расширяющееся кольцо с радиальным искажением; бас-удар. */
     shockwave: boolean;
-    glitch: boolean;
+    /** Водная рябь из нескольких затухающих колец; средний удар на жидком веществе. */
+    ripple: boolean;
+    /** Толчок камеры; направление — от частотного профиля. */
     shake: boolean;
+    /** Резкий наезд с упругим возвратом; дроп. */
+    punchZoom: boolean;
+    /** Кратковременная бочка или подушка; сильный удар. */
+    lensPulse: boolean;
+    /** Резкий крен с возвратом; снейр. */
+    rollKick: boolean;
+    /** Сжатие сцены по вертикали; кик. */
+    compression: boolean;
+    /** Разлёт RGB-каналов от центра; пик flux. */
+    chromaticBurst: boolean;
+    /** Сдвиг горизонтальных блоков; резкий flux. */
+    slice: boolean;
+    /** Волна давления, расталкивающая частицы; дроп. */
+    pressureWave: boolean;
+    /** Полноэкранная вспышка. */
     strobe: boolean;
     /** Общая интенсивность модификаторов, 0..1. */
     intensity: number;
     /** Safety-лимит вспышек. Выше 3 Гц поднимать не стоит: фотосенситивная эпилепсия. */
     maxFlashHz: number;
+  };
+  deformation: {
+    /** Постоянные деформации вещества: domain warp, twist, wave, melt, fold. */
+    enabled: boolean;
+    /** Общий множитель, 0..1. */
+    amount: number;
   };
   sources: {
     /** Опрашивать Spotify (нужен Client ID и разовая авторизация). */
@@ -120,11 +147,22 @@ export function defaultSettings(): Settings {
     transients: {
       burst: true,
       shockwave: true,
-      glitch: true,
+      ripple: true,
       shake: true,
+      punchZoom: true,
+      lensPulse: true,
+      rollKick: true,
+      compression: true,
+      chromaticBurst: true,
+      slice: true,
+      pressureWave: true,
       strobe: true,
       intensity: 0.7,
       maxFlashHz: MAX_SAFE_FLASH_HZ,
+    },
+    deformation: {
+      enabled: true,
+      amount: 0.6,
     },
     sources: {
       spotify: false,
@@ -163,7 +201,9 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.generator.mode = 'auto';
       s.transients.intensity = 0.85;
       s.transients.shake = true;
-      s.transients.glitch = false;
+      s.transients.slice = false;
+      s.transients.chromaticBurst = false;
+      s.deformation.amount = 0.45;
     },
   },
   {
@@ -176,7 +216,9 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.palette.tuning.chromaBoost = 1.35;
       s.generator.morphRate = 1.4;
       s.transients.intensity = 1;
-      s.transients.glitch = true;
+      s.transients.slice = true;
+      s.transients.chromaticBurst = true;
+      s.deformation.amount = 0.85;
     },
   },
   {
@@ -193,6 +235,10 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.transients.intensity = 0.25;
       s.transients.strobe = false;
       s.transients.shake = false;
+      s.transients.punchZoom = false;
+      s.transients.slice = false;
+      s.transients.chromaticBurst = false;
+      s.deformation.amount = 0.35;
     },
   },
 ];
@@ -210,6 +256,7 @@ export function mergeSettings(saved: unknown): Settings {
   mergeSection(base.camera, source.camera);
   mergeSection(base.generator, source.generator);
   mergeSection(base.transients, source.transients);
+  mergeSection(base.deformation, source.deformation);
   mergeSection(base.sources, source.sources);
   mergeSection(base.cover, source.cover);
   mergeSection(base.lyrics, source.lyrics);
