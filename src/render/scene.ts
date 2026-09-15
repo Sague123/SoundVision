@@ -60,6 +60,18 @@ export interface Light {
   flash: number;
   /** Насколько свет тёплый: 0 — холодный (минор), 1 — тёплый (мажор). */
   warmth: number;
+  /**
+   * Положение источника в кадре, 0..1. Привязано к доминирующей полосе:
+   * бас опускает свет вниз, верх поднимает вверх.
+   */
+  x: number;
+  y: number;
+  /** Экспозиция: множитель яркости, дышит на бит. Не строб. */
+  exposure: number;
+  /** Сжатие виньетки: 0 — раскрыта, 1 — поджата. */
+  vignette: number;
+  /** Сила блика на пиковом ударе, 0..1. */
+  flare: number;
 }
 
 // ------------------------------------------------------------------ камера
@@ -74,6 +86,24 @@ export interface Camera {
   roll: number;
   /** Вертикальное сжатие: 1 — норма, меньше — сцену придавило ударом сверху. */
   squash: number;
+  /**
+   * Точка интереса в долях кадра, 0..1. Вокруг неё идут наезд и крен, поэтому
+   * кадр не крутится вечно вокруг геометрического центра.
+   */
+  focusX: number;
+  focusY: number;
+  /**
+   * Поле зрения: 1 — норма, меньше — сужено (билд-ап), больше — расширено.
+   * Узкое поле поджимает кадр и выпрямляет его, широкое — раздаёт и гнёт линзой.
+   */
+  fov: number;
+  /**
+   * Скорость движения вперёд/назад, -1..1. Сама по себе почти не видна:
+   * туннель из неё делает обратная связь кадра, которой она задаёт направление.
+   */
+  dolly: number;
+  /** Номер последней склейки: по смене значения потребители понимают, что был рез. */
+  cutId: number;
 }
 
 // -------------------------------------------------------------- деформации
@@ -98,6 +128,47 @@ export interface Deformation {
   /** Собственные часы деформаций: идут в темпе трека, а не в реальном времени. */
   time: number;
 }
+
+// ------------------------------------------------------------------ память
+
+/** Призрак прошлого удара: остаётся на сцене и медленно гаснет. */
+export interface Ghost {
+  x: number;
+  y: number;
+  strength: number;
+  age: number;
+  life: number;
+  kind: ImpulseKind;
+}
+
+/**
+ * Память сцены. Следы, обратная связь кадра и призраки — всё про то, что
+ * сцена помнит прошлые кадры, а не рисуется заново каждый раз.
+ */
+export interface Memory {
+  /** Длина следов: 0 — чистый кадр, 1 — почти без очистки. */
+  trail: number;
+  /**
+   * Доля прошлого кадра, подмешиваемая в текущий. Всегда меньше единицы:
+   * это и есть предохранитель от самовозбуждения.
+   */
+  feedbackAmount: number;
+  /** Масштаб прошлого кадра: больше единицы — полёт в туннель. */
+  feedbackZoom: number;
+  /** Поворот прошлого кадра, радианы — из него получаются спирали. */
+  feedbackRotate: number;
+  /** Смещение прошлого кадра в долях кадра. */
+  feedbackX: number;
+  feedbackY: number;
+  /** Временное размазывание: прошлый кадр без преобразования. */
+  smear: number;
+  ghosts: Ghost[];
+  /** Доли такта, через которые память повторяет удар: выбраны seed'ом трека. */
+  echoDivisions: readonly number[];
+}
+
+/** Потолок обратной связи. Выше — кадр уходит в самовозбуждение и белеет. */
+export const FEEDBACK_CEILING = 0.88;
 
 // ----------------------------------------------------------------- импульс
 
@@ -184,8 +255,7 @@ export interface SceneState {
   impulses: Impulse[];
   /** Суммарная энергия волн прямо сейчас, 0..1 — общий множитель реакций. */
   impulseEnergy: number;
-  /** Длина следов от памяти, 0..1. */
-  memoryTrail: number;
+  memory: Memory;
 }
 
 /**
@@ -207,6 +277,16 @@ export interface SceneConfig {
   pressureWave: boolean;
   /** Общий множитель постоянных деформаций вещества, 0..1. */
   deformation: number;
+  /** Монтажные склейки на границах частей. */
+  cut: boolean;
+  /** Доля обратной связи кадра, 0..1 (умножается на потолок безопасности). */
+  feedback: number;
+  /** Временное размазывание на дропе, 0..1. */
+  smear: number;
+  /** Призраки прошлых ударов. */
+  ghosts: boolean;
+  /** Блики на пиковых ударах. */
+  flare: boolean;
 }
 
 export function defaultSceneConfig(): SceneConfig {
@@ -223,6 +303,11 @@ export function defaultSceneConfig(): SceneConfig {
     slice: true,
     pressureWave: true,
     deformation: 0.6,
+    cut: false,
+    feedback: 0.5,
+    smear: 0.6,
+    ghosts: true,
+    flare: true,
   };
 }
 
@@ -242,14 +327,27 @@ export function classifyImpulse(profile: BandProfile): ImpulseKind {
   return 'snare';
 }
 
+/** Реже раза в 15 секунд склейка не мешает, чаще — укачивает. */
+const CUT_MIN_INTERVAL_MS = 16_000;
+
 const MAX_IMPULSES = 24;
 /** Сколько колец одного типа живёт одновременно: шейдер читает их в цикле. */
 const MAX_RINGS = 4;
 const MAX_PENDING_ECHOES = 32;
 /** Порог силы удара, ниже которого импульс не рождается. */
 const IMPULSE_FLOOR = 0.08;
-/** Доли такта, на которых память повторяет удар. */
-const ECHO_DIVISIONS = [0.5, 0.25];
+/**
+ * Ритмические рисунки эха — доли такта, через которые повторяется удар.
+ * Рисунок выбирается seed'ом трека, поэтому один трек «отвечает» прямо,
+ * другой — пунктиром.
+ */
+const ECHO_PATTERNS: number[][] = [
+  [0.5, 0.25],        // прямое
+  [0.375, 0.75],      // пунктирное, 3/8 такта
+  [0.25, 0.5, 0.75],  // плотное
+];
+
+const MAX_GHOSTS = 14;
 
 export class Scene {
   private readonly impulses: Impulse[] = [];
@@ -275,6 +373,23 @@ export class Scene {
   private chromaticBurst = 0;
   private slice = 0;
   private pressure = 0;
+  /** Точка интереса и её медленный дрейф. */
+  private focusX = 0.5;
+  private focusY = 0.5;
+  private focusSeedX = 0;
+  private focusSeedY = 0;
+  private fov = 1;
+  private dolly = 0;
+  private cutId = 0;
+  private lastCutMs = -Infinity;
+  private echoPattern: number[] = ECHO_PATTERNS[0];
+  private readonly ghosts: Ghost[] = [];
+  private feedbackRotate = 0;
+  private lightX = 0.5;
+  private lightY = 0.5;
+  private vignette = 0.45;
+  private flare = 0;
+
   /** Упругий наезд: смещение и его скорость — обычная пружина с затуханием. */
   private punchOffset = 0;
   private punchVelocity = 0;
@@ -296,7 +411,11 @@ export class Scene {
     this.noise = new SimplexNoise(this.rng);
     this.driftSeedX = this.rng() * 100;
     this.driftSeedY = this.rng() * 100;
+    this.focusSeedX = this.rng() * 100;
+    this.focusSeedY = this.rng() * 100;
     this.orbitPhase = this.rng() * Math.PI * 2;
+    this.echoPattern = ECHO_PATTERNS[Math.floor(this.rng() * ECHO_PATTERNS.length)];
+    this.ghosts.length = 0;
     this.impulses.length = 0;
     this.pendingEchoes.length = 0;
     this.shockwaves.length = 0;
@@ -307,7 +426,9 @@ export class Scene {
     const dt = Math.min(0.1, mood.deltaMs / 1000);
     this.config = config;
 
+    const sectionChanged = mood.section !== this.prevSection;
     this.emitImpulses(mood, config.intensity);
+    this.maybeCut(mood, sectionChanged);
     this.releaseEchoes(mood);
     this.integrateImpulses(dt);
 
@@ -331,8 +452,7 @@ export class Scene {
       impact,
       impulses: this.impulses,
       impulseEnergy: normalizedImpulse,
-      // Кристалл держит форму дольше, плазма сгорает мгновенно.
-      memoryTrail: clamp01(0.8 - mood.energy * 0.45 - substance.axis * 0.25),
+      memory: this.updateMemory(mood, dt, substance, camera),
     };
   }
 
@@ -377,7 +497,7 @@ export class Scene {
     if (strength < 0.25) return; // слабые удары эха не оставляют, иначе каша
     const barMs = (60000 / Math.max(40, mood.bpm)) * 4;
 
-    for (const division of ECHO_DIVISIONS) {
+    for (const division of this.echoPattern) {
       if (this.pendingEchoes.length >= MAX_PENDING_ECHOES) break;
       this.pendingEchoes.push({
         atMs: mood.timeMs + barMs * division,
@@ -457,6 +577,15 @@ export class Scene {
     this.cameraKickX -= Math.cos(angle) * power * 0.035;
     this.cameraKickY -= Math.sin(angle) * power * 0.035;
 
+    // Призрак остаётся на сцене и гаснет несколько секунд после самого удара.
+    if (config.ghosts && power > 0.3) {
+      if (this.ghosts.length >= MAX_GHOSTS) this.ghosts.shift();
+      this.ghosts.push({
+        x: clamp01(x), y: clamp01(y), strength: clamp01(power), age: 0,
+        life: 2.5 + power * 3.5, kind,
+      });
+    }
+
     // --- ступень 2: заметный удар ---
     if (power > 0.3) {
       if (config.shockwave && kind === 'bass') {
@@ -485,8 +614,10 @@ export class Scene {
     }
 
     // --- ступень 4: пик ---
-    if (power > 0.68 && config.chromaticBurst) {
-      this.chromaticBurst = Math.max(this.chromaticBurst, power);
+    if (power > 0.68) {
+      if (config.chromaticBurst) this.chromaticBurst = Math.max(this.chromaticBurst, power);
+      // Блик — дозированно: только на пиковых ударах и не от эха.
+      if (config.flare && !echo) this.flare = Math.max(this.flare, power * 0.8);
     }
 
     // --- дроп: всё сразу ---
@@ -496,6 +627,47 @@ export class Scene {
       if (config.pressureWave) this.pressure = Math.max(this.pressure, power);
       if (config.chromaticBurst) this.chromaticBurst = Math.max(this.chromaticBurst, power * 0.9);
     }
+  }
+
+  /**
+   * Память сцены: следы, обратная связь кадра и призраки.
+   *
+   * Обратная связь — самая опасная часть: кадр, подмешанный сам в себя с
+   * коэффициентом ≥ 1, за секунду уходит в белое. Поэтому доля жёстко
+   * ограничена FEEDBACK_CEILING, а шейдер дополнительно гасит прошлый кадр.
+   */
+  private updateMemory(mood: MoodVector, dt: number, substance: Substance, camera: Camera): Memory {
+    for (let i = this.ghosts.length - 1; i >= 0; i--) {
+      const ghost = this.ghosts[i];
+      ghost.age += dt;
+      if (ghost.age >= ghost.life) this.ghosts.splice(i, 1);
+    }
+
+    // Поворот прошлого кадра копится — из этого получаются спирали, а не просто
+    // повторы под одним углом.
+    this.feedbackRotate += dt * camera.roll * 0.5 + dt * substance.axis * 0.02;
+
+    const config = this.config;
+    const sectionPush = mood.section === 'drop' ? 0.25 : mood.section === 'calm' ? -0.1 : 0;
+    const feedbackAmount = config.feedback <= 0 ? 0 : Math.min(
+      FEEDBACK_CEILING,
+      (0.3 + mood.energy * 0.3 + substance.axis * 0.15 + sectionPush) * config.feedback,
+    );
+
+    return {
+      // Кристалл держит форму дольше, плазма сгорает мгновенно.
+      trail: clamp01(0.8 - mood.energy * 0.45 - substance.axis * 0.25),
+      feedbackAmount,
+      // Долли задаёт направление полёта: вперёд — туннель, назад — раскрытие.
+      feedbackZoom: 1 + camera.dolly * 0.016 * (config.feedback > 0 ? 1 : 0),
+      feedbackRotate: this.feedbackRotate * 0.04,
+      feedbackX: camera.x * 0.15,
+      feedbackY: camera.y * 0.15,
+      // Размазывание — отдельный приём и только на дропе.
+      smear: mood.section === 'drop' ? clamp01(mood.energy * 0.45) * config.smear : 0,
+      ghosts: this.ghosts,
+      echoDivisions: this.echoPattern,
+    };
   }
 
   /** Кольцо живёт в списке, пока его фронт не уйдёт за пределы кадра. */
@@ -603,13 +775,44 @@ export class Scene {
 
   private updateLight(mood: MoodVector, dt: number): Light {
     this.lightFlash = Math.max(0, this.lightFlash - dt * 3.2);
+    this.flare = Math.max(0, this.flare - dt * 2.6);
     // Источник медленно обходит сцену; на быстрых треках — быстрее.
     const orbit = this.orbitPhase + (mood.timeMs / 1000) * (0.08 + mood.bpm / 2400);
+
+    // Высота источника — от того, какая полоса сейчас громче. Бас тяжёлый и
+    // светит снизу, верх лёгкий и светит сверху.
+    const bands = mood.bands;
+    const weight = bands.low + bands.mid + bands.high;
+    const balance = weight > 1e-5 ? (bands.high - bands.low) / weight : 0;
+    const targetY = 0.5 - balance * 0.38;
+    this.lightY = lerp(this.lightY, clamp(0.08, 0.92, targetY), 1 - Math.exp(-dt / 0.8));
+    const targetX = 0.5 + Math.cos(orbit) * 0.32;
+    this.lightX = lerp(this.lightX, targetX, 1 - Math.exp(-dt / 0.35));
+
+    // Экспозиция дышит на долю. Амплитуда намеренно маленькая: это дыхание,
+    // а не стробоскоп, и лимита частоты ей не нужно.
+    const exposure = 1 + Math.sin(mood.beatPhase * Math.PI * 2) * mood.energy * 0.1
+      + this.lightFlash * 0.12;
+
+    // Виньетка поджимается на билд-апе и раскрывается на дропе.
+    const vignetteTarget = mood.section === 'buildup'
+      ? 0.75 + mood.energy * 0.2
+      : mood.section === 'drop'
+        ? 0.12
+        : 0.45 - mood.energy * 0.15;
+    this.vignette = lerp(this.vignette, vignetteTarget,
+      1 - Math.exp(-dt / (vignetteTarget < this.vignette ? 0.25 : 1.1)));
+
     return {
       angle: orbit,
       intensity: clamp01(0.3 + mood.energy * 0.6),
       flash: this.lightFlash,
       warmth: mood.key.mode === 'major' ? clamp01(0.55 + mood.key.confidence * 0.45) : clamp01(0.45 - mood.key.confidence * 0.45),
+      x: this.lightX,
+      y: this.lightY,
+      exposure,
+      vignette: clamp01(this.vignette),
+      flare: clamp01(this.flare),
     };
   }
 
@@ -665,13 +868,66 @@ export class Scene {
 
     const rollBase = Math.sin(this.orbitPhase * Math.PI * 2 * 0.5) * (0.01 + substance.axis * 0.03);
 
+    // Look-at wander: точка интереса медленно уходит от центра и возвращается.
+    // Отдельный шум, а не тот же, что у дрейфа, — иначе кадр просто едет целиком.
+    const focusTargetX = 0.5 + this.noise.noise2D(this.focusSeedX, t * 0.022) * 0.18;
+    const focusTargetY = 0.5 + this.noise.noise2D(this.focusSeedY, t * 0.019 + 7.7) * 0.14;
+    this.focusX = lerp(this.focusX, focusTargetX, 1 - Math.exp(-dt / 1.2));
+    this.focusY = lerp(this.focusY, focusTargetY, 1 - Math.exp(-dt / 1.2));
+
+    // FOV breathing: на билд-апе поле сужается и копит напряжение,
+    // на дропе резко раскрывается. Поэтому вниз тянемся медленно, вверх — быстро.
+    const fovTarget = mood.section === 'buildup'
+      ? 0.82 - mood.energy * 0.06
+      : mood.section === 'drop'
+        ? 1.2 + mood.energy * 0.18
+        : 1 + (mood.energy - 0.4) * 0.08;
+    const fovTau = fovTarget > this.fov ? 0.12 : 1.4;
+    this.fov = clamp(0.7, 1.45, lerp(this.fov, fovTarget, 1 - Math.exp(-dt / fovTau)));
+
+    // Dolly: плотное вещество тянет вперёд, разреженное — назад.
+    const dollyTarget = clamp(-1, 1, (substance.axis - 0.45) * 1.6 + mood.energy * 0.5 - 0.2);
+    this.dolly = lerp(this.dolly, dollyTarget, 1 - Math.exp(-dt / 2.2));
+
     return {
       x: driftX + orbitX + this.cameraKickX + shakeX,
       y: driftY + orbitY + this.cameraKickY + shakeY,
-      zoom: clamp(0.85, 1.5, this.zoomDrift + substance.deformation * 0.02 + this.punchOffset),
+      // Узкое поле зрения читается как поджатый кадр — компенсируем масштабом.
+      zoom: clamp(0.85, 1.6,
+        (this.zoomDrift + substance.deformation * 0.02 + this.punchOffset) / Math.sqrt(this.fov)),
       roll: rollBase + this.cameraKickRoll,
       // Удар сверху сплющивает сцену по вертикали и чуть растягивает по горизонтали.
       squash: 1 - this.compression * 0.1,
+      focusX: this.focusX,
+      focusY: this.focusY,
+      fov: this.fov,
+      dolly: this.dolly,
+      cutId: this.cutId,
     };
+  }
+
+  /**
+   * Монтажная склейка: мгновенная смена ракурса.
+   *
+   * Делается сбросом фаз — точка интереса, орбита и дрейф прыгают в новое
+   * место, и кадр читается как другой план. Лимит по времени жёсткий: чаще
+   * раза в 15-20 секунд от этого укачивает.
+   */
+  private maybeCut(mood: MoodVector, sectionChanged: boolean): void {
+    if (!this.config.cut || !sectionChanged) return;
+    // Режем только на дропе и на возврате в затишье — это и есть границы частей.
+    if (mood.section !== 'drop' && mood.section !== 'calm') return;
+    if (mood.timeMs - this.lastCutMs < CUT_MIN_INTERVAL_MS) return;
+
+    this.lastCutMs = mood.timeMs;
+    this.cutId++;
+    this.driftSeedX = this.rng() * 100;
+    this.driftSeedY = this.rng() * 100;
+    this.focusSeedX = this.rng() * 100;
+    this.focusSeedY = this.rng() * 100;
+    this.orbitPhase = this.rng() * Math.PI * 2;
+    // Точку интереса переносим мгновенно: в этом весь смысл склейки.
+    this.focusX = 0.5 + (this.rng() * 2 - 1) * 0.2;
+    this.focusY = 0.5 + (this.rng() * 2 - 1) * 0.16;
   }
 }

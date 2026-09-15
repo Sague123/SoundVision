@@ -75,20 +75,30 @@ export class DebugOverlay {
         ` вспышка ${stats.scene.light.flash.toFixed(2)} тепло ${stats.scene.light.warmth.toFixed(2)}`,
       `камера   x ${stats.scene.camera.x.toFixed(3)} y ${stats.scene.camera.y.toFixed(3)}` +
         ` zoom ${stats.scene.camera.zoom.toFixed(3)} крен ${stats.scene.camera.roll.toFixed(3)}`,
+      `         фокус ${stats.scene.camera.focusX.toFixed(2)}/${stats.scene.camera.focusY.toFixed(2)}` +
+        ` fov ${stats.scene.camera.fov.toFixed(2)} долли ${stats.scene.camera.dolly.toFixed(2)}` +
+        ` склеек ${stats.scene.camera.cutId}`,
+      `свет     позиция ${stats.scene.light.x.toFixed(2)}/${stats.scene.light.y.toFixed(2)}` +
+        ` эксп ${stats.scene.light.exposure.toFixed(3)} виньетка ${stats.scene.light.vignette.toFixed(2)}` +
+        ` блик ${stats.scene.light.flare.toFixed(2)} порог ${stats.bloomThreshold.toFixed(2)}`,
+      `память   эхо ${stats.scene.memory.echoDivisions.join('/')}` +
+        ` обр.связь ${stats.scene.memory.feedbackAmount.toFixed(2)}` +
+        ` zoom ${stats.scene.memory.feedbackZoom.toFixed(3)}` +
+        ` смаз ${stats.scene.memory.smear.toFixed(2)} призраков ${stats.scene.memory.ghosts.length}`,
       `импульсы ${stats.scene.impulses.length} (эхо ${stats.scene.impulses.filter((i) => i.echo).length})` +
         ` энергия ${stats.scene.impulseEnergy.toFixed(2)}`,
       `палитра  ${stats.harmonyName}, оттенок ${stats.palette.hue.toFixed(0)}°`,
       `base     ${stats.baseId}`,
       `active   ${stats.activePrimitives.join(', ') || '—'}`,
-      `частицы  ${stats.transient.particles} кольца ${stats.transient.rings}` +
-        ` вспышка ${stats.transient.flash.toFixed(2)}`,
+      `частицы  ${stats.transient.particles} (${stats.transient.particleTypes.join(', ') || '—'})` +
+        ` кольца ${stats.transient.rings} вспышка ${stats.transient.flash.toFixed(2)}`,
       `импакт   волн ${stats.scene.impact.shockwaves.length} ряби ${stats.scene.impact.ripples.length}` +
         ` линза ${stats.scene.impact.lensPulse.toFixed(2)} RGB ${stats.scene.impact.chromaticBurst.toFixed(2)}` +
         ` блоки ${stats.scene.impact.slice.toFixed(2)} давл ${stats.scene.impact.pressure.toFixed(2)}`,
       `деформ   warp ${stats.scene.deformation.domainWarp.toFixed(2)} twist ${stats.scene.deformation.twist.toFixed(2)}` +
         ` wave ${stats.scene.deformation.wave.toFixed(2)} turb ${stats.scene.deformation.turbulence.toFixed(2)}` +
         ` melt ${stats.scene.deformation.melt.toFixed(2)} fold ${stats.scene.deformation.fold.toFixed(2)}` +
-        ` ${stats.warpActive ? '[варп]' : '[пропуск]'}`,
+        ` ${stats.postActive ? '[пост]' : '[пропуск]'}`,
       `полосы   низ ${bar(mood.bands.low, 6)} сер ${bar(mood.bands.mid, 6)} верх ${bar(mood.bands.high, 6)}`,
       `удар     ${lastImpulse ? `${IMPULSE_KIND_LABELS[lastImpulse.kind]} сила ${lastImpulse.strength.toFixed(2)}` +
         ` профиль ${lastImpulse.profile.low.toFixed(2)}/${lastImpulse.profile.mid.toFixed(2)}/${lastImpulse.profile.high.toFixed(2)}` +

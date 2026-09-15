@@ -6,8 +6,8 @@
  * шейдер перестал компилироваться или эффект выродился.
  */
 
-import type { Deformation, ImpactState } from '../src/render/scene.ts';
-import { WarpPass } from '../src/render/warp-pass.ts';
+import type { Deformation, ImpactState, Light, Memory } from '../src/render/scene.ts';
+import { PostPass } from '../src/render/post-pass.ts';
 
 const CELL_WIDTH = 230;
 const CELL_HEIGHT = 130;
@@ -57,6 +57,14 @@ function zeroDeformation(): Deformation {
   return { domainWarp: 0, twist: 0, wave: 0, turbulence: 0, melt: 0, fold: 0, time: 4.2 };
 }
 
+/** Память выключена: ячейки статичны, обратной связи в них быть не должно. */
+function zeroMemory(): Memory {
+  return {
+    trail: 0, feedbackAmount: 0, feedbackZoom: 1, feedbackRotate: 0,
+    feedbackX: 0, feedbackY: 0, smear: 0, ghosts: [], echoDivisions: [],
+  };
+}
+
 function zeroImpact(): ImpactState {
   return { shockwaves: [], ripples: [], lensPulse: 0, chromaticBurst: 0, slice: 0, pressure: 0 };
 }
@@ -103,7 +111,18 @@ const cases: Array<{ name: string; deformation: Deformation; impact: ImpactState
   { name: 'slice displacement', deformation: zeroDeformation(), impact: { ...zeroImpact(), slice: 1 } },
 ];
 
-const warp = new WarpPass();
+/** Свет нейтрализован: страница показывает только геометрию искажений. */
+const NEUTRAL_LIGHT = {
+  bloom: 0, bloomThreshold: 0.5, rays: 0, rim: 0,
+  lightColour: [1, 1, 1] as [number, number, number],
+  rimColour: [1, 1, 1] as [number, number, number],
+};
+const NEUTRAL_LIGHT_STATE: Light = {
+  angle: 0, intensity: 0.5, flash: 0, warmth: 0.5,
+  x: 0.5, y: 0.5, exposure: 1, vignette: 0, flare: 0,
+};
+
+const warp = new PostPass();
 warp.resize(CELL_WIDTH, CELL_HEIGHT);
 
 const grid = document.createElement('div');
@@ -125,7 +144,7 @@ for (const item of cases) {
   view.style.cssText = 'width:100%;border-radius:6px;display:block';
   const ctx = view.getContext('2d');
 
-  const output = warp.render(source, item.deformation, item.impact);
+  const output = warp.render(source, item.deformation, item.impact, zeroMemory(), NEUTRAL_LIGHT_STATE, NEUTRAL_LIGHT);
   if (ctx) {
     // Варп недоступен — показываем исходник, чтобы отличить «нет эффекта»
     // от «шейдер не собрался».

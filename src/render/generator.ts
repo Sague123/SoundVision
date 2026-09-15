@@ -293,7 +293,7 @@ export class Generator {
       // Пространство коробит проходящими волнами — это видимая часть импульса.
       warp: clamp01(substance.deformation * 0.7 + mood.flux * 0.4),
       // Память сцены сама решает, насколько долго держатся следы.
-      trail: clamp01(scene.memoryTrail + (mood.section === 'calm' ? 0.12 : 0)),
+      trail: clamp01(scene.memory.trail + (mood.section === 'calm' ? 0.12 : 0)),
       symmetry: clamp(3, 12, this.seedValue.symmetry),
     };
   }

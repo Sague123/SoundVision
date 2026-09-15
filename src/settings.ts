@@ -4,6 +4,7 @@
  */
 
 import { defaultTuning, type PaletteTuning } from './render/palette.ts';
+import { PARTICLE_TYPES, type ParticleType } from './render/particles.ts';
 import { ALL_PRIMITIVE_IDS, type PrimitiveId } from './render/primitives/types.ts';
 
 export interface LayerSettings {
@@ -33,6 +34,11 @@ export interface Settings {
     enabled: boolean;
     /** Общая амплитуда движения камеры, 0..1. */
     amount: number;
+    /**
+     * Монтажные склейки на границах частей. Не чаще раза в 16 секунд —
+     * иначе от резких смен ракурса укачивает.
+     */
+    cut: boolean;
   };
   generator: {
     /** auto — набор примитивов выбирает mood vector; manual — список ниже. */
@@ -86,6 +92,39 @@ export interface Settings {
     /** Общий множитель, 0..1. */
     amount: number;
   };
+  particles: {
+    enabled: boolean;
+    /** auto — набор типов выбирает рейтинг уместности; manual — список ниже. */
+    mode: 'auto' | 'manual';
+    manual: ParticleType[];
+    /** Общая плотность, 0..1. */
+    density: number;
+  };
+  light: {
+    /** Сила свечения ярких мест, 0..1. Порог адаптивный, кадр не выжигается. */
+    bloom: number;
+    /** Объёмные лучи от источника, 0..1. */
+    rays: number;
+    /** Контровой свет по силуэтам, 0..1. */
+    rim: number;
+    /** Блики на пиковых ударах. */
+    flare: boolean;
+    /** Дыхание экспозиции на долю. Это не строб: амплитуда мала и лимит не нужен. */
+    exposure: boolean;
+    /** Динамическая виньетка: поджимается на билд-апе, раскрывается на дропе. */
+    vignette: boolean;
+  };
+  memory: {
+    /**
+     * Обратная связь кадра: прошлый кадр подмешивается в текущий со сдвигом,
+     * масштабом и поворотом. Отсюда бесконечные туннели и спирали.
+     */
+    feedback: number;
+    /** Временное размазывание на дропе. */
+    smear: number;
+    /** Призраки прошлых ударов. */
+    ghosts: boolean;
+  };
   sources: {
     /** Опрашивать Spotify (нужен Client ID и разовая авторизация). */
     spotify: boolean;
@@ -133,6 +172,7 @@ export function defaultSettings(): Settings {
     camera: {
       enabled: true,
       amount: 0.7,
+      cut: true,
     },
     generator: {
       mode: 'auto',
@@ -156,13 +196,33 @@ export function defaultSettings(): Settings {
       chromaticBurst: true,
       slice: true,
       pressureWave: true,
-      strobe: true,
+      // Строб выключен по умолчанию намеренно: он самый агрессивный из всего набора.
+      strobe: false,
       intensity: 0.7,
       maxFlashHz: MAX_SAFE_FLASH_HZ,
     },
     deformation: {
       enabled: true,
       amount: 0.6,
+    },
+    particles: {
+      enabled: true,
+      mode: 'auto',
+      manual: ['sparks', 'dust'],
+      density: 0.6,
+    },
+    light: {
+      bloom: 0.55,
+      rays: 0.35,
+      rim: 0.3,
+      flare: true,
+      exposure: true,
+      vignette: true,
+    },
+    memory: {
+      feedback: 0.5,
+      smear: 0.6,
+      ghosts: true,
     },
     sources: {
       spotify: false,
@@ -219,6 +279,9 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.transients.slice = true;
       s.transients.chromaticBurst = true;
       s.deformation.amount = 0.85;
+      s.memory.feedback = 0.75;
+      s.light.bloom = 0.7;
+      s.light.rays = 0.5;
     },
   },
   {
@@ -239,6 +302,11 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.transients.slice = false;
       s.transients.chromaticBurst = false;
       s.deformation.amount = 0.35;
+      s.memory.feedback = 0.3;
+      s.memory.smear = 0.2;
+      s.light.bloom = 0.4;
+      s.light.rays = 0.2;
+      s.light.flare = false;
     },
   },
 ];
@@ -257,6 +325,9 @@ export function mergeSettings(saved: unknown): Settings {
   mergeSection(base.generator, source.generator);
   mergeSection(base.transients, source.transients);
   mergeSection(base.deformation, source.deformation);
+  mergeSection(base.particles, source.particles);
+  mergeSection(base.light, source.light);
+  mergeSection(base.memory, source.memory);
   mergeSection(base.sources, source.sources);
   mergeSection(base.cover, source.cover);
   mergeSection(base.lyrics, source.lyrics);
@@ -271,6 +342,8 @@ export function mergeSettings(saved: unknown): Settings {
 
   base.generator.manual = base.generator.manual.filter((id) => ALL_PRIMITIVE_IDS.includes(id));
   if (base.generator.manual.length === 0) base.generator.manual = ['flow-field'];
+  base.particles.manual = base.particles.manual.filter((id) => PARTICLE_TYPES.includes(id));
+  if (base.particles.manual.length === 0) base.particles.manual = ['dust'];
   base.transients.maxFlashHz = Math.min(MAX_SAFE_FLASH_HZ, Math.max(0, base.transients.maxFlashHz));
   return base;
 }

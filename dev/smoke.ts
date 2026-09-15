@@ -25,7 +25,7 @@ const FRAMES_PER_STAGE = 45;
 interface SmokeReport {
   done: boolean;
   frames: number;
-  /** В скольких кадрах реально отработал проход искажения. */
+  /** В скольких кадрах реально отработал пост-конвейер. */
   warpFrames: number;
   errors: string[];
   stages: Array<{ primitive: PrimitiveId; section: Section; avgFrameMs: number; rendered: string[] }>;
@@ -59,7 +59,12 @@ const only = params.get('only') as PrimitiveId | null;
 const onlySection = (params.get('section') as Section | null) ?? 'steady';
 /** В режиме `?only=` стадия одна и живёт бесконечно — это ручной осмотр. */
 const held = only !== null && ALL_PRIMITIVE_IDS.includes(only);
-const framesPerStage = held ? Number.POSITIVE_INFINITY : FRAMES_PER_STAGE;
+/** `?frames=20` укорачивает прогон: с полным пост-конвейером он заметно дольше. */
+const requestedFrames = Number(params.get('frames'));
+const stageFrames = Number.isFinite(requestedFrames) && requestedFrames > 0
+  ? Math.round(requestedFrames)
+  : FRAMES_PER_STAGE;
+const framesPerStage = held ? Number.POSITIVE_INFINITY : stageFrames;
 
 const stages: Array<{ primitive: PrimitiveId; section: Section }> = [];
 if (held && only) {
@@ -126,7 +131,7 @@ function frame(timestamp: number): void {
       url: '', image: null, colors: [],
     });
     frameMsTotal += stats.frameMs;
-    if (stats.warpActive) report.warpFrames++;
+    if (stats.postActive) report.warpFrames++;
     for (const id of stats.activePrimitives) renderedInStage.add(id);
   } catch (err) {
     report.errors.push(`${stage.primitive}/${stage.section}: ${(err as Error).message}`);
@@ -137,7 +142,7 @@ function frame(timestamp: number): void {
   frameInStage++;
   label.textContent = held
     ? `${stage.primitive} / ${stage.section} — кадр ${frameInStage}`
-    : `${stage.primitive} / ${stage.section} — ${frameInStage}/${FRAMES_PER_STAGE}`;
+    : `${stage.primitive} / ${stage.section} — ${frameInStage}/${stageFrames}`;
   // В режиме осмотра отмечаемся «готовы» после прогрева, но рисовать продолжаем.
   if (held && frameInStage > 40) report.done = true;
 

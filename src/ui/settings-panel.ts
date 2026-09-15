@@ -4,6 +4,7 @@
  */
 
 import { HARMONY_SCHEMES } from '../render/palette.ts';
+import { PARTICLE_LABELS, PARTICLE_TYPES } from '../render/particles.ts';
 import { ALL_PRIMITIVE_IDS, PRIMITIVE_LABELS, type PrimitiveId } from '../render/primitives/types.ts';
 import { MAX_SAFE_FLASH_HZ, PRESET_PROFILES, type Settings } from '../settings.ts';
 import {
@@ -24,6 +25,7 @@ export interface PanelStatus {
   seed: string;
   substance: string;
   harmony: string;
+  particles: string;
 }
 
 export interface SettingsPanelHandlers {
@@ -88,6 +90,7 @@ export class SettingsPanel {
       ['Вещество', status.substance],
       ['Гармония', status.harmony],
       ['Примитивы', status.primitives || '—'],
+      ['Частицы', status.particles || '—'],
       ['Seed', status.seed],
       ['Источник', status.source],
       ['Spotify', status.spotify],
@@ -266,6 +269,12 @@ export class SettingsPanel {
         set: (v) => { s.camera.amount = v; },
         format: (v) => `${Math.round(v * 100)}%`,
       })),
+      this.track(toggle({
+        label: 'Монтажные склейки',
+        get: () => s.camera.cut,
+        set: (v) => { s.camera.cut = v; },
+      })),
+      note('Склейка — резкая смена ракурса на границе части. Не чаще раза в 16 секунд.'),
     ));
 
     this.body.append(section(
@@ -318,6 +327,91 @@ export class SettingsPanel {
         get: () => s.deformation.amount,
         set: (v) => { s.deformation.amount = v; },
         format: (v) => `${Math.round(v * 100)}%`,
+      })),
+    ));
+
+    this.body.append(section(
+      'Частицы',
+      note('Все типы несёт то же поле потока, что и линии фона — поэтому они '
+        + 'часть сцены, а не слой поверх неё. Набор выбирается по настроению.'),
+      this.track(toggle({
+        label: 'Частицы', get: () => s.particles.enabled, set: (v) => { s.particles.enabled = v; },
+      })),
+      this.track(select({
+        label: 'Набор типов',
+        options: [
+          { value: 'auto', label: 'Авто (по настроению)' },
+          { value: 'manual', label: 'Вручную' },
+        ],
+        get: () => s.particles.mode,
+        set: (v) => { s.particles.mode = v; },
+      })),
+      ...PARTICLE_TYPES.map((type) => this.track(toggle({
+        label: PARTICLE_LABELS[type],
+        get: () => s.particles.manual.includes(type),
+        set: (v) => {
+          const set = new Set(s.particles.manual);
+          if (v) set.add(type);
+          else set.delete(type);
+          s.particles.manual = [...set];
+        },
+      }))),
+      this.track(slider({
+        label: 'Плотность', min: 0, max: 1, step: 0.02,
+        get: () => s.particles.density, set: (v) => { s.particles.density = v; },
+        format: (v) => `${Math.round(v * 100)}%`,
+      })),
+    ));
+
+    this.body.append(section(
+      'Свет',
+      note('Порог свечения адаптивный — он держится выше средней яркости кадра, '
+        + 'поэтому светится то, что выделяется, а не картинка целиком.'),
+      this.track(slider({
+        label: 'Свечение (bloom)', min: 0, max: 1, step: 0.02,
+        get: () => s.light.bloom, set: (v) => { s.light.bloom = v; },
+        format: (v) => `${Math.round(v * 100)}%`,
+      })),
+      this.track(slider({
+        label: 'Объёмные лучи', min: 0, max: 1, step: 0.02,
+        get: () => s.light.rays, set: (v) => { s.light.rays = v; },
+        format: (v) => `${Math.round(v * 100)}%`,
+      })),
+      this.track(slider({
+        label: 'Контровой свет', min: 0, max: 1, step: 0.02,
+        get: () => s.light.rim, set: (v) => { s.light.rim = v; },
+        format: (v) => `${Math.round(v * 100)}%`,
+      })),
+      this.track(toggle({
+        label: 'Блики на пиках', get: () => s.light.flare, set: (v) => { s.light.flare = v; },
+      })),
+      this.track(toggle({
+        label: 'Дыхание экспозиции', get: () => s.light.exposure, set: (v) => { s.light.exposure = v; },
+      })),
+      this.track(toggle({
+        label: 'Динамическая виньетка', get: () => s.light.vignette, set: (v) => { s.light.vignette = v; },
+      })),
+      note('Источник света двигается по кадру за доминирующей полосой: '
+        + 'бас опускает его вниз, верх поднимает вверх.'),
+    ));
+
+    this.body.append(section(
+      'Память сцены',
+      note('Обратная связь подмешивает прошлый кадр в текущий со сдвигом, масштабом '
+        + 'и поворотом — отсюда туннели и спирали. Доля жёстко ограничена, чтобы кадр '
+        + 'не ушёл в самовозбуждение.'),
+      this.track(slider({
+        label: 'Обратная связь', min: 0, max: 1, step: 0.02,
+        get: () => s.memory.feedback, set: (v) => { s.memory.feedback = v; },
+        format: (v) => `${Math.round(v * 100)}%`,
+      })),
+      this.track(slider({
+        label: 'Размазывание на дропе', min: 0, max: 1, step: 0.02,
+        get: () => s.memory.smear, set: (v) => { s.memory.smear = v; },
+        format: (v) => `${Math.round(v * 100)}%`,
+      })),
+      this.track(toggle({
+        label: 'Призраки ударов', get: () => s.memory.ghosts, set: (v) => { s.memory.ghosts = v; },
       })),
     ));
 

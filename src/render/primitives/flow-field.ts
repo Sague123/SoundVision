@@ -1,15 +1,9 @@
-import { SimplexNoise } from '../noise.ts';
+import { FlowField } from '../flow-field.ts';
 import { mulberry32, type GeneratorSeed } from '../seed.ts';
 import type { DrawPrimitive, RenderFrame } from './types.ts';
 
 const MAX_PARTICLES = 2600;
 const COLOR_BANDS = 6;
-const TAU = Math.PI * 2;
-/**
- * Сколько волн одновременно толкают вещество. Больше трёх на глаз уже не
- * различить, а стоимость растёт линейно по числу частиц.
- */
-const MAX_PUSHING_WAVES = 3;
 
 /**
  * Частицы, которых несёт поле симплекс-шума. Самый «читаемый» примитив:
@@ -19,15 +13,16 @@ export class FlowFieldPrimitive implements DrawPrimitive {
   readonly id = 'flow-field' as const;
   readonly kind = 'draw' as const;
 
-  private noise = new SimplexNoise();
   private readonly xs = new Float32Array(MAX_PARTICLES);
   private readonly ys = new Float32Array(MAX_PARTICLES);
   private readonly ages = new Float32Array(MAX_PARTICLES);
   private readonly lives = new Float32Array(MAX_PARTICLES);
   private width = 1;
   private height = 1;
-  private phase = 0;
   private rng = mulberry32(1);
+  /** Поле потока общее со всей сценой: его задаёт компоновщик. */
+  private field = new FlowField();
+  private readonly push = { x: 0, y: 0 };
 
   resize(width: number, height: number): void {
     this.width = width;
@@ -37,9 +32,12 @@ export class FlowFieldPrimitive implements DrawPrimitive {
 
   reseed(seed: GeneratorSeed): void {
     this.rng = mulberry32(seed.seed ^ 0x9e3779b9);
-    this.noise = new SimplexNoise(this.rng);
-    this.phase = seed.phase['flow-field'];
     for (let i = 0; i < MAX_PARTICLES; i++) this.respawn(i);
+  }
+
+  /** Поле потока приходит снаружи — одно на всю сцену, вместе с частицами. */
+  useField(field: FlowField): void {
+    this.field = field;
   }
 
   dispose(): void {}
@@ -50,28 +48,15 @@ export class FlowFieldPrimitive implements DrawPrimitive {
     if (count <= 0) return;
 
     const dt = Math.min(0.05, frame.dtMs / 1000);
-    const t = (frame.timeMs / 1000) * (0.05 + params.speed * 0.35) + this.phase;
-    // Крупный scale — длинные плавные «реки», мелкий — рваная турбулентность.
-    const fieldScale = 0.0016 + (1 - params.scale) * 0.007;
+    const seconds = frame.timeMs / 1000;
     const turbulence = 1 + params.chaos * 2.4;
     const velocity = 30 + params.speed * 230 + mood.energy * 260;
     const step = velocity * dt;
 
     // Фронты волн от ударов: вещество расталкивается там, где проходит волна.
-    const diagonal = Math.hypot(this.width, this.height);
-    const waves = frame.scene.impulses
-      .slice()
-      .sort((a, b) => b.strength - a.strength)
-      .slice(0, MAX_PUSHING_WAVES)
-      .map((impulse) => ({
-        x: impulse.x * this.width,
-        y: impulse.y * this.height,
-        // Радиус фронта и его толщина — в пикселях, чтобы не считать это в цикле.
-        ring: impulse.radius * diagonal,
-        thickness: diagonal * 0.06,
-        force: impulse.strength * (1 - impulse.age / impulse.life) * velocity * 2.4 * dt,
-      }))
-      .filter((wave) => wave.force > 0.01);
+    const waves = FlowField.prepareWaves(
+      frame.scene.impulses, this.width, this.height, velocity, dt, frame.scene.impact.pressure,
+    );
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -88,23 +73,10 @@ export class FlowFieldPrimitive implements DrawPrimitive {
       for (let i = from; i < to; i++) {
         const x = this.xs[i];
         const y = this.ys[i];
-        const angle = this.noise.noise3D(x * fieldScale, y * fieldScale, t) * TAU * turbulence;
-        let nx = x + Math.cos(angle) * step;
-        let ny = y + Math.sin(angle) * step;
-
-        for (const wave of waves) {
-          const dx = x - wave.x;
-          const dy = y - wave.y;
-          const distance = Math.hypot(dx, dy);
-          if (distance < 1e-3) continue;
-          // Гауссиана вокруг фронта: толкает только там, где волна сейчас проходит.
-          const offset = (distance - wave.ring) / wave.thickness;
-          const falloff = Math.exp(-offset * offset);
-          if (falloff < 0.01) continue;
-          const push = (wave.force * falloff) / distance;
-          nx += dx * push;
-          ny += dy * push;
-        }
+        const angle = this.field.angleAt(x, y, seconds, params.speed, params.scale, turbulence);
+        FlowField.pushAt(waves, x, y, this.push);
+        const nx = x + Math.cos(angle) * step + this.push.x;
+        const ny = y + Math.sin(angle) * step + this.push.y;
 
         ctx.moveTo(x, y);
         ctx.lineTo(nx, ny);

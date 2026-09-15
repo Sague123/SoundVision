@@ -7,6 +7,7 @@ import { clamp, clamp01 } from '../audio/features.ts';
 import type { MoodVector } from '../audio/mood-vector.ts';
 import type { CoverArt } from '../cover/cover-art.ts';
 import type { Settings } from '../settings.ts';
+import { FlowField } from './flow-field.ts';
 import { Generator } from './generator.ts';
 import { BaseLayer } from './layer-base.ts';
 import { GenreLayer } from './layer-genre.ts';
@@ -14,7 +15,7 @@ import { TransientLayer, type TransientDebug } from './layer-transient.ts';
 import { findHarmony, PaletteEngine, type HarmonyScheme, type Palette } from './palette.ts';
 import type { PrimitiveId, RenderFrame } from './primitives/types.ts';
 import { Scene, type SceneConfig, type SceneState } from './scene.ts';
-import { WarpPass } from './warp-pass.ts';
+import { PostPass, type LightSettings } from './post-pass.ts';
 import { trackKey } from './seed.ts';
 
 export interface CompositorStats {
@@ -23,14 +24,16 @@ export interface CompositorStats {
   activePrimitives: PrimitiveId[];
   baseId: PrimitiveId;
   transient: TransientDebug;
-  /** Отработал ли проход искажения в этом кадре. */
-  warpActive: boolean;
+  /** Отработал ли пост-конвейер в этом кадре. */
+  postActive: boolean;
   palette: Palette;
   scene: SceneState;
   effectiveQuality: number;
   seedLabel: string;
   /** Имя действующей гармонической схемы — для панели и отладки. */
   harmonyName: string;
+  /** Текущий адаптивный порог свечения. */
+  bloomThreshold: number;
 }
 
 /** Ниже этого fps начинаем экономить на разрешении шейдера. */
@@ -40,15 +43,22 @@ const QUALITY_MIN = 0.3;
 const QUALITY_STEP = 0.1;
 const QUALITY_CHECK_MS = 2000;
 
+/** Размер копии кадра для замера средней яркости и период замера. */
+const LUMA_WIDTH = 16;
+const LUMA_HEIGHT = 9;
+const LUMA_INTERVAL_FRAMES = 6;
+
 export class Compositor {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly base = new BaseLayer();
   private readonly genre = new GenreLayer();
-  private readonly transient = new TransientLayer();
+  /** Общее поле потока: им несёт и линии фона, и все частицы. */
+  private readonly field = new FlowField();
+  private readonly transient = new TransientLayer(this.field);
   private readonly generator: Generator;
   private readonly paletteEngine = new PaletteEngine();
   private readonly scene = new Scene();
-  private readonly warp = new WarpPass();
+  private readonly post = new PostPass();
 
   /**
    * Слои сводятся сюда, а не сразу на экран: варп читает сведённый кадр
@@ -66,12 +76,17 @@ export class Compositor {
   private effectiveQuality = 0.5;
   private lastQualityCheckMs = 0;
   /**
-   * Варп — полноэкранный проход плюс две копии кадра. Если разрешение
-   * шейдера уже на минимуме, а fps всё равно не вытягивает, отключаем его:
-   * лучше без деформаций, но плавно.
+   * Пост-конвейер — четыре полноэкранных прохода. Если разрешение raymarch
+   * уже на минимуме, а fps всё равно не вытягивает, снимаем его целиком:
+   * лучше без деформаций и света, но плавно.
    */
-  private warpAllowed = true;
+  private postAllowed = true;
   private lowFpsStreak = 0;
+  /** Адаптивный порог bloom, см. measureLuminance. */
+  private bloomThreshold = 0.5;
+  private frameCounter = 0;
+  private readonly lumaCanvas = document.createElement('canvas');
+  private readonly lumaCtx: CanvasRenderingContext2D | null;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
@@ -79,6 +94,9 @@ export class Compositor {
     if (!ctx || !composedCtx) throw new Error('2D-контекст недоступен');
     this.ctx = ctx;
     this.composedCtx = composedCtx;
+    this.lumaCanvas.width = LUMA_WIDTH;
+    this.lumaCanvas.height = LUMA_HEIGHT;
+    this.lumaCtx = this.lumaCanvas.getContext('2d', { willReadFrequently: true });
     this.generator = new Generator(trackKey(null, null));
     this.reseedLayers();
   }
@@ -107,7 +125,7 @@ export class Compositor {
     this.base.resize(this.width, this.height);
     this.genre.resize(this.width, this.height);
     this.transient.resize(this.width, this.height);
-    this.warp.resize(this.width, this.height);
+    this.post.resize(this.width, this.height);
   }
 
   /** @returns true, если seed сменился и слои были переинициализированы. */
@@ -147,13 +165,14 @@ export class Compositor {
     if (settings.layers.base.enabled) this.base.render(frame, state, settings, cover);
     const activePrimitives = settings.layers.genre.enabled ? this.genre.render(frame, state) : [];
 
-    this.transient.update(mood, settings, scene);
+    this.transient.update(mood, settings, scene, settings.particles);
     const transientDebug = settings.layers.transient.enabled
       ? this.transient.render(palette, scene, clamp01(settings.layers.transient.weight))
-      : { particles: 0, rings: 0, flash: 0 };
+      : { particles: 0, rings: 0, flash: 0, particleTypes: [] };
 
     this.compose(settings, scene);
-    const warped = this.applyWarp(scene);
+    this.measureLuminance();
+    const posted = this.applyPost(scene, settings, palette);
 
     const frameMs = performance.now() - started;
     this.trackFps(mood.deltaMs);
@@ -164,19 +183,20 @@ export class Compositor {
       activePrimitives,
       baseId: state.baseId,
       transient: transientDebug,
-      warpActive: warped,
+      postActive: posted,
       palette,
       scene,
       effectiveQuality: this.effectiveQuality,
       seedLabel: state.seed.label,
       harmonyName: harmony.name,
+      bloomThreshold: this.bloomThreshold,
     };
   }
 
   dispose(): void {
     this.base.dispose();
     this.genre.dispose();
-    this.warp.dispose();
+    this.post.dispose();
   }
 
   /**
@@ -200,21 +220,27 @@ export class Compositor {
     const offsetX = camera.x * minSide * amount;
     const offsetY = camera.y * minSide * amount;
     const roll = camera.roll * amount;
-    const shakeMargin = Math.max(Math.abs(offsetX), Math.abs(offsetY)) / minSide;
-    // Кадр должен покрыть себя после поворота и сдвига, иначе по краям чернота.
-    const overscale = coverScale(this.width, this.height, roll) * (1 + shakeMargin * 2.2);
+
+    // Точка интереса: наезд и крен идут вокруг неё, а не вокруг центра кадра.
+    const cx = this.width / 2;
+    const cy = this.height / 2;
+    const focusX = cx + (camera.focusX - 0.5) * this.width * amount;
+    const focusY = cy + (camera.focusY - 0.5) * this.height * amount;
+
+    // Кадр должен покрыть себя после поворота, сдвига и ухода точки интереса.
+    const margin = (Math.max(Math.abs(offsetX), Math.abs(offsetY))
+      + Math.max(Math.abs(focusX - cx), Math.abs(focusY - cy))) / minSide;
+    const overscale = coverScale(this.width, this.height, roll) * (1 + margin * 2.2);
     const scale = Math.max(1, camera.zoom * amount + (1 - amount)) * overscale;
     // Сжатие по вертикали компенсируем растяжением по горизонтали: кадр
     // «придавливает», а не уменьшает.
     const squash = 1 - (1 - camera.squash) * amount;
 
-    const cx = this.width / 2;
-    const cy = this.height / 2;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.translate(cx + offsetX, cy + offsetY);
+    ctx.translate(focusX + offsetX, focusY + offsetY);
     ctx.rotate(roll);
     ctx.scale(scale / squash, scale * squash);
-    ctx.translate(-cx, -cy);
+    ctx.translate(-focusX, -focusY);
 
     if (settings.layers.base.enabled) {
       ctx.globalCompositeOperation = 'source-over';
@@ -251,19 +277,73 @@ export class Compositor {
    * Проход искажения и перенос кадра на экран.
    * @returns отработал ли варп; false — кадр ушёл на экран как есть.
    */
-  private applyWarp(scene: SceneState): boolean {
+  private applyPost(scene: SceneState, settings: Settings, palette: Palette): boolean {
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = 1;
 
-    const idle = WarpPass.isIdle(scene.deformation, scene.impact);
-    const output = idle || !this.warpAllowed || !this.warp.available
+    // Широкое поле зрения гнёт кадр бочкой, узкое — выпрямляет. Это статичная
+    // часть линзы, в отличие от импульсной lensPulse.
+    const fovLens = settings.camera.enabled
+      ? (scene.camera.fov - 1) * 0.3 * clamp01(settings.camera.amount)
+      : 0;
+
+    const light: LightSettings = {
+      bloom: clamp01(settings.light.bloom),
+      bloomThreshold: this.bloomThreshold,
+      rays: clamp01(settings.light.rays),
+      rim: clamp01(settings.light.rim),
+      lightColour: toUnitRgb(palette.accentRgb(scene.light.warmth)),
+      rimColour: toUnitRgb(palette.accentRgb(0.95)),
+    };
+    // Выключенные дыхание и виньетка — это нейтральные значения, а не отдельная
+    // ветка в шейдере.
+    const lightState = {
+      ...scene.light,
+      exposure: settings.light.exposure ? scene.light.exposure : 1,
+      vignette: settings.light.vignette ? scene.light.vignette : 0,
+      flare: settings.light.flare ? scene.light.flare : 0,
+    };
+
+    const idle = PostPass.isIdle(scene.deformation, scene.impact, scene.memory, light)
+      && Math.abs(fovLens) < 0.004;
+    const output = idle || !this.postAllowed || !this.post.available
       ? null
-      : this.warp.render(this.composed, scene.deformation, scene.impact);
+      : this.post.render(
+        this.composed, scene.deformation, scene.impact, scene.memory, lightState, light, fovLens,
+      );
 
     ctx.drawImage(output ?? this.composed, 0, 0, this.width, this.height);
     return output !== null;
+  }
+
+  /**
+   * Средняя яркость кадра для адаптивного порога bloom.
+   *
+   * Считается по крошечной копии и не каждый кадр: getImageData синхронизирует
+   * конвейер, а порог по своей природе медленный и в частых замерах не нуждается.
+   */
+  private measureLuminance(): void {
+    if (this.frameCounter++ % LUMA_INTERVAL_FRAMES !== 0) return;
+    const ctx = this.lumaCtx;
+    if (!ctx) return;
+
+    ctx.drawImage(this.composed, 0, 0, LUMA_WIDTH, LUMA_HEIGHT);
+    let sum = 0;
+    try {
+      const data = ctx.getImageData(0, 0, LUMA_WIDTH, LUMA_HEIGHT).data;
+      for (let i = 0; i < data.length; i += 4) {
+        sum += (data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722) / 255;
+      }
+    } catch {
+      return;
+    }
+    const mean = sum / (LUMA_WIDTH * LUMA_HEIGHT);
+    // Порог держится выше средней яркости: светится то, что выделяется на фоне
+    // кадра, а не весь кадр целиком. Именно это и не даёт выжечь картинку.
+    const target = clamp(0.2, 0.85, mean * 1.5 + 0.18);
+    this.bloomThreshold += (target - this.bloomThreshold) * 0.25;
   }
 
   private buildPalette(
@@ -297,14 +377,14 @@ export class Compositor {
       if (this.fps < FPS_FLOOR) {
         this.effectiveQuality = Math.max(QUALITY_MIN, this.effectiveQuality - QUALITY_STEP);
         this.lowFpsStreak++;
-        // Снимаем варп только когда снижать уже нечего и провал устойчивый.
-        if (this.effectiveQuality <= QUALITY_MIN && this.lowFpsStreak >= 3) this.warpAllowed = false;
+        // Снимаем конвейер только когда снижать уже нечего и провал устойчивый.
+        if (this.effectiveQuality <= QUALITY_MIN && this.lowFpsStreak >= 3) this.postAllowed = false;
       } else if (this.fps > FPS_CEILING) {
         this.lowFpsStreak = 0;
         if (this.effectiveQuality < target) {
           this.effectiveQuality = Math.min(target, this.effectiveQuality + QUALITY_STEP);
         } else {
-          this.warpAllowed = true;
+          this.postAllowed = true;
         }
       } else {
         this.lowFpsStreak = 0;
@@ -323,14 +403,21 @@ export class Compositor {
 
   private reseedLayers(): void {
     const seed = this.generator.seed;
+    // Поле пересевается первым: слои и частицы должны получить уже новое.
+    this.field.reseed(seed);
     this.base.reseed(seed);
     this.genre.reseed(seed);
+    this.genre.useField(this.field);
+    this.transient.reseed(seed, this.field);
     this.scene.reseed(seed);
   }
 }
 
 /** Камера в покое: ею подменяется сцена, когда камера выключена в настройках. */
-const IDLE_CAMERA = { x: 0, y: 0, zoom: 1, roll: 0, squash: 1 } as const;
+const IDLE_CAMERA = {
+  x: 0, y: 0, zoom: 1, roll: 0, squash: 1,
+  focusX: 0.5, focusY: 0.5, fov: 1, dolly: 0, cutId: 0,
+} as const;
 
 /**
  * Минимальный масштаб, при котором повёрнутый кадр всё ещё накрывает экран.
@@ -361,5 +448,15 @@ function sceneConfig(settings: Settings): SceneConfig {
     slice: t.slice,
     pressureWave: t.pressureWave,
     deformation: settings.deformation.enabled ? clamp01(settings.deformation.amount) : 0,
+    cut: settings.camera.enabled && settings.camera.cut,
+    feedback: clamp01(settings.memory.feedback),
+    smear: clamp01(settings.memory.smear),
+    ghosts: settings.memory.ghosts,
+    flare: settings.light.flare,
   };
+}
+
+/** Цвет палитры 0..255 → 0..1 для шейдера. */
+function toUnitRgb([r, g, b]: [number, number, number]): [number, number, number] {
+  return [r / 255, g / 255, b / 255];
 }

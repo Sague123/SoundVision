@@ -9,6 +9,9 @@
  * не входят: они живут в UV-координатах и делаются одним проходом варпа на
  * GPU. Тряска — тоже не здесь: это движение камеры.
  *
+ * Сами частицы живут в общей системе (particles.ts) и несутся общим полем
+ * потока — слой только даёт им холст и передаёт удары.
+ *
  * Про безопасность: частота полноэкранных вспышек жёстко ограничена
  * (settings.transients.maxFlashHz, потолок — 3 Гц) из-за фотосенситивной эпилепсии.
  */
@@ -17,22 +20,12 @@ import { clamp01 } from '../audio/features.ts';
 import type { MoodVector } from '../audio/mood-vector.ts';
 import type { Settings } from '../settings.ts';
 import type { Palette } from './palette.ts';
+import type { FlowField } from './flow-field.ts';
+import { ParticleSystem, type ParticleConfig, type ParticleDebug } from './particles.ts';
 import type { Impulse, SceneState } from './scene.ts';
+import type { GeneratorSeed } from './seed.ts';
 
-const MAX_PARTICLES = 900;
 const MAX_RINGS = 8;
-
-interface Particle {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  life: number;
-  maxLife: number;
-  tone: number;
-  size: number;
-  echo: boolean;
-}
 
 interface Ring {
   x: number;
@@ -50,6 +43,8 @@ export interface TransientDebug {
   particles: number;
   rings: number;
   flash: number;
+  /** Какие типы частиц сейчас активны. */
+  particleTypes: string[];
 }
 
 export class TransientLayer {
@@ -58,18 +53,24 @@ export class TransientLayer {
   private width = 1;
   private height = 1;
 
-  private readonly particles: Particle[] = [];
+  private readonly particles: ParticleSystem;
   private readonly rings: Ring[] = [];
+  private particleDebug: ParticleDebug = { active: [], count: 0 };
   private flash = 0;
   private flashTone = 0;
   private lastFlashMs = -Infinity;
   /** Номер последнего отработанного импульса: на каждый реагируем ровно раз. */
   private lastImpulseId = 0;
 
-  constructor() {
+  constructor(field: FlowField) {
     const ctx = this.canvas.getContext('2d');
     if (!ctx) throw new Error('2D-контекст недоступен');
     this.ctx = ctx;
+    this.particles = new ParticleSystem(field);
+  }
+
+  reseed(seed: GeneratorSeed, field: FlowField): void {
+    this.particles.reseed(seed, field);
   }
 
   resize(width: number, height: number): void {
@@ -77,9 +78,10 @@ export class TransientLayer {
     this.height = height;
     this.canvas.width = width;
     this.canvas.height = height;
+    this.particles.resize(width, height);
   }
 
-  update(mood: MoodVector, settings: Settings, scene: SceneState): void {
+  update(mood: MoodVector, settings: Settings, scene: SceneState, particles: ParticleConfig): void {
     const t = settings.transients;
     const intensity = t.intensity;
     const dt = Math.min(0.05, mood.deltaMs / 1000);
@@ -92,7 +94,6 @@ export class TransientLayer {
       this.lastImpulseId = impulse.id;
       strongest = Math.max(strongest, impulse.strength);
 
-      if (t.burst) this.spawnBurst(impulse, intensity);
       // Кольцо рисуется на тех же ударах, на которых сцена запускает волну.
       if ((t.shockwave || t.ripple) && impulse.strength > 0.3) this.spawnRing(impulse, intensity);
     }
@@ -108,6 +109,8 @@ export class TransientLayer {
     }
 
     this.integrate(dt);
+    // Частицы обновляются всегда: они фон сцены, а не реакция на конкретный удар.
+    this.particleDebug = this.particles.update(mood, scene, particles, mood.deltaMs);
   }
 
   render(palette: Palette, scene: SceneState, weight: number): TransientDebug {
@@ -116,13 +119,19 @@ export class TransientLayer {
     ctx.clearRect(0, 0, this.width, this.height);
     ctx.globalCompositeOperation = 'lighter';
 
-    for (const particle of this.particles) {
-      const life = particle.life / particle.maxLife;
-      ctx.fillStyle = particle.echo
-        ? palette.echo(1 - life, life * life * weight)
-        : palette.accentAlpha(particle.tone, life * life * weight);
+    // Призраки прошлых ударов: тусклые пятна, которые гаснут секундами.
+    // Рисуются первыми, чтобы свежие частицы ложились поверх них.
+    for (const ghost of scene.memory.ghosts) {
+      const life = 1 - ghost.age / ghost.life;
+      const radius = Math.min(this.width, this.height) * (0.04 + ghost.strength * 0.1) * (2 - life);
+      const x = ghost.x * this.width;
+      const y = ghost.y * this.height;
+      const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+      gradient.addColorStop(0, palette.accentAlpha(ghost.strength, life * life * 0.35 * weight));
+      gradient.addColorStop(1, palette.accentAlpha(ghost.strength, 0));
+      ctx.fillStyle = gradient;
       ctx.beginPath();
-      ctx.arc(particle.x, particle.y, particle.size * (0.4 + life * 0.8), 0, Math.PI * 2);
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -144,24 +153,17 @@ export class TransientLayer {
       ctx.fillRect(0, 0, this.width, this.height);
     }
 
+    this.particles.draw(ctx, palette, scene, weight);
+
     return {
-      particles: this.particles.length,
+      particles: this.particleDebug.count,
       rings: this.rings.length,
       flash: this.flash,
+      particleTypes: this.particleDebug.active,
     };
   }
 
   private integrate(dt: number): void {
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const particle = this.particles[i];
-      particle.x += particle.vx * dt;
-      particle.y += particle.vy * dt;
-      particle.vx *= 0.97;
-      particle.vy *= 0.97;
-      particle.life -= dt;
-      if (particle.life <= 0) this.particles.splice(i, 1);
-    }
-
     for (let i = this.rings.length - 1; i >= 0; i--) {
       const ring = this.rings[i];
       ring.radius += ring.speed * dt;
@@ -170,34 +172,6 @@ export class TransientLayer {
     }
 
     this.flash = Math.max(0, this.flash - dt * 3.4);
-  }
-
-  /** Частицы разлетаются из точки удара, а не из случайного места экрана. */
-  private spawnBurst(impulse: Impulse, intensity: number): void {
-    const power = impulse.strength * intensity;
-    const count = Math.min(MAX_PARTICLES - this.particles.length, Math.round(14 + power * 120));
-    if (count <= 0) return;
-
-    const cx = impulse.x * this.width;
-    const cy = impulse.y * this.height;
-    const baseSpeed = Math.min(this.width, this.height) * (0.25 + power * 0.9);
-
-    for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = baseSpeed * (0.25 + Math.random() * 0.9);
-      const maxLife = 0.35 + Math.random() * (0.5 + power * 0.6);
-      this.particles.push({
-        x: cx,
-        y: cy,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        life: maxLife,
-        maxLife,
-        tone: (impulse.x + Math.random() * 0.4) % 1,
-        size: 1 + Math.random() * (1.5 + power * 3),
-        echo: impulse.echo,
-      });
-    }
   }
 
   private spawnRing(impulse: Impulse, intensity: number): void {

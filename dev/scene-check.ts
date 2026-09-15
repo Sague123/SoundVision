@@ -10,11 +10,13 @@ import { idleMood, type MoodVector } from '../src/audio/mood-vector.ts';
 import { tonicHue } from '../src/render/color/harmony.ts';
 import { findHarmony } from '../src/render/palette.ts';
 import { PaletteEngine, defaultTuning } from '../src/render/palette.ts';
+import { FlowField } from '../src/render/flow-field.ts';
 import { Generator } from '../src/render/generator.ts';
+import { ParticleSystem } from '../src/render/particles.ts';
 import {
   Scene, classifyImpulse, defaultSceneConfig, type ImpulseKind,
 } from '../src/render/scene.ts';
-import { WarpPass } from '../src/render/warp-pass.ts';
+import { PostPass } from '../src/render/post-pass.ts';
 import { defaultSettings } from '../src/settings.ts';
 import { makeSeed } from '../src/render/seed.ts';
 import type { NoteName } from '../src/audio/chroma.ts';
@@ -41,6 +43,9 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
 
   const bpm = 120; // такт = 4 доли по 500 мс = 2000 мс
   const barMs = (60000 / bpm) * 4;
+  // Рисунок эха выбирает seed трека, поэтому ожидаемые моменты берём у сцены,
+  // а не зашиваем: проверяем механику, а не конкретный рисунок.
+  const divisions = [...scene.update(moodAt(0, { bpm }), SCENE_CONFIG).memory.echoDivisions];
   const births: Array<{ atMs: number; echo: boolean }> = [];
   let seen = 0;
 
@@ -65,12 +70,13 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
   const originals = births.filter((b) => !b.echo);
   const echoes = births.filter((b) => b.echo);
   check('один удар — один исходный импульс', originals.length === 1, `их ${originals.length}`);
-  check('память дала два эха', echoes.length === 2, `их ${echoes.length}`);
+  check('память дала эхо на каждую долю рисунка', echoes.length === divisions.length,
+    `рисунок ${divisions.join('/')}, эх ${echoes.length}`);
 
-  if (echoes.length === 2) {
-    const expected = [barMs * 0.25, barMs * 0.5].sort((a, b) => a - b);
+  if (echoes.length === divisions.length) {
+    const expected = divisions.map((d) => barMs * d).sort((a, b) => a - b);
     const actual = echoes.map((e) => e.atMs).sort((a, b) => a - b);
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < expected.length; i++) {
       const error = Math.abs(actual[i] - expected[i]);
       check(
         `эхо ${i + 1} в доле такта`,
@@ -437,11 +443,195 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
 {
   const scene = new Scene();
   scene.reseed(makeSeed('покой'));
-  const config = { ...SCENE_CONFIG, deformation: 0 };
+  // «Нечего искажать» — это и про деформации, и про память.
+  const config = { ...SCENE_CONFIG, deformation: 0, feedback: 0, smear: 0 };
   let state = scene.update(moodAt(0, {}), config);
   for (let frame = 1; frame < 120; frame++) state = scene.update(moodAt(frame * FRAME_MS, {}), config);
-  check('без деформаций и ударов проход искажения пропускается',
-    WarpPass.isIdle(state.deformation, state.impact), 'варп всё ещё считает себя нужным');
+  const noLight = {
+    bloom: 0, bloomThreshold: 0.5, rays: 0, rim: 0,
+    lightColour: [1, 1, 1] as [number, number, number],
+    rimColour: [1, 1, 1] as [number, number, number],
+  };
+  check('без деформаций, ударов и света пост-конвейер пропускается',
+    PostPass.isIdle(state.deformation, state.impact, state.memory, noLight),
+    'конвейер всё ещё считает себя нужным');
+}
+
+// --- 12. Камера: поле зрения, склейки, долли -------------------------------
+{
+  const settle = (overrides: Partial<MoodVector>, frames = 300) => {
+    const scene = new Scene();
+    scene.reseed(makeSeed('камера'));
+    let state = scene.update(moodAt(0, overrides), SCENE_CONFIG);
+    for (let frame = 1; frame < frames; frame++) {
+      state = scene.update(moodAt(frame * FRAME_MS, overrides), SCENE_CONFIG);
+    }
+    return state.camera;
+  };
+
+  const buildup = settle({ energy: 0.7, section: 'buildup' });
+  const drop = settle({ energy: 0.9, section: 'drop' });
+  check('на билд-апе поле зрения сужается', buildup.fov < 0.9, `fov ${buildup.fov.toFixed(3)}`);
+  check('на дропе поле зрения раскрывается', drop.fov > 1.15, `fov ${drop.fov.toFixed(3)}`);
+
+  // Плотное вещество тянет камеру вперёд, разреженное — назад.
+  const dense = settle({ energy: 0.85, noisiness: 0.9, brightness: 0.9, section: 'drop' });
+  const sparse = settle({ energy: 0.1, noisiness: 0.02, brightness: 0.05, section: 'calm' });
+  check('долли идёт вперёд на плотном веществе и назад на разреженном',
+    dense.dolly > 0 && sparse.dolly < 0,
+    `плотное ${dense.dolly.toFixed(2)}, разреженное ${sparse.dolly.toFixed(2)}`);
+
+  // Точка интереса блуждает, но не улетает за кадр.
+  const scene = new Scene();
+  scene.reseed(makeSeed('фокус'));
+  let minX = 1;
+  let maxX = 0;
+  for (let frame = 0; frame < 3600; frame++) {
+    const camera = scene.update(moodAt(frame * FRAME_MS, { energy: 0.5 }), SCENE_CONFIG).camera;
+    minX = Math.min(minX, camera.focusX);
+    maxX = Math.max(maxX, camera.focusX);
+  }
+  check('точка интереса блуждает', maxX - minX > 0.05, `размах ${(maxX - minX).toFixed(3)}`);
+  check('точка интереса не уходит за кадр', minX > 0.2 && maxX < 0.8,
+    `диапазон ${minX.toFixed(2)}..${maxX.toFixed(2)}`);
+}
+
+// --- 13. Склейки: только на границах частей и не чаще лимита ----------------
+{
+  const countCuts = (enabled: boolean): { cuts: number; minGapMs: number } => {
+    const scene = new Scene();
+    scene.reseed(makeSeed('склейки'));
+    const config = { ...SCENE_CONFIG, cut: enabled };
+    let previousId = 0;
+    let lastAtMs = -Infinity;
+    let cuts = 0;
+    let minGapMs = Infinity;
+
+    // Секция дёргается каждые 2 секунды — куда чаще, чем лимит склеек.
+    for (let frame = 0; frame < 60 * 120; frame++) {
+      const timeMs = frame * FRAME_MS;
+      const phase = Math.floor(timeMs / 2000) % 3;
+      const section = phase === 0 ? 'steady' : phase === 1 ? 'drop' : 'calm';
+      const camera = scene.update(moodAt(timeMs, { energy: 0.7, section }), config).camera;
+      if (camera.cutId !== previousId) {
+        previousId = camera.cutId;
+        cuts++;
+        minGapMs = Math.min(minGapMs, timeMs - lastAtMs);
+        lastAtMs = timeMs;
+      }
+    }
+    return { cuts, minGapMs };
+  };
+
+  const on = countCuts(true);
+  const off = countCuts(false);
+  check('склейки выключаются настройкой', off.cuts === 0, `склеек ${off.cuts}`);
+  check('склейки происходят', on.cuts > 0, `склеек ${on.cuts} за 2 минуты`);
+  check('склейки не чаще раза в 16 секунд', on.minGapMs >= 16000,
+    `самый короткий промежуток ${(on.minGapMs / 1000).toFixed(1)} с`);
+}
+
+// --- 14. Свет: позиция от полосы, виньетка от секции -------------------------
+{
+  const settleLight = (overrides: Partial<MoodVector>, frames = 300) => {
+    const scene = new Scene();
+    scene.reseed(makeSeed('свет'));
+    let state = scene.update(moodAt(0, overrides), SCENE_CONFIG);
+    for (let frame = 1; frame < frames; frame++) {
+      state = scene.update(moodAt(frame * FRAME_MS, overrides), SCENE_CONFIG);
+    }
+    return state.light;
+  };
+
+  const bassy = settleLight({ bands: { low: 1, mid: 0.3, high: 0.05 }, energy: 0.6 });
+  const trebly = settleLight({ bands: { low: 0.05, mid: 0.3, high: 1 }, energy: 0.6 });
+  // y растёт вниз: бас должен светить снизу, верх — сверху.
+  check('бас опускает источник света вниз', bassy.y > 0.6, `y ${bassy.y.toFixed(3)}`);
+  check('верх поднимает источник света вверх', trebly.y < 0.4, `y ${trebly.y.toFixed(3)}`);
+
+  const buildup = settleLight({ energy: 0.7, section: 'buildup' });
+  const drop = settleLight({ energy: 0.9, section: 'drop' });
+  check('виньетка поджимается на билд-апе', buildup.vignette > 0.7, `${buildup.vignette.toFixed(2)}`);
+  check('виньетка раскрывается на дропе', drop.vignette < 0.2, `${drop.vignette.toFixed(2)}`);
+
+  // Экспозиция дышит, но остаётся дыханием: это не стробоскоп.
+  const scene = new Scene();
+  scene.reseed(makeSeed('экспозиция'));
+  let minExposure = Infinity;
+  let maxExposure = 0;
+  const bpm = 128;
+  for (let frame = 0; frame < 600; frame++) {
+    const timeMs = frame * FRAME_MS;
+    // Фазу доли считаем сами: idleMood держит её нулевой, а дыхание идёт именно от неё.
+    const beatPhase = ((timeMs / 1000) * (bpm / 60)) % 1;
+    const light = scene.update(
+      moodAt(timeMs, { energy: 0.9, bpm, beatPhase }), SCENE_CONFIG,
+    ).light;
+    minExposure = Math.min(minExposure, light.exposure);
+    maxExposure = Math.max(maxExposure, light.exposure);
+  }
+  check('экспозиция дышит', maxExposure - minExposure > 0.02,
+    `размах ${(maxExposure - minExposure).toFixed(3)}`);
+  check('дыхание экспозиции не превращается в строб', maxExposure - minExposure < 0.35,
+    `размах ${(maxExposure - minExposure).toFixed(3)}`);
+}
+
+// --- 15. Частицы: набор по настроению ---------------------------------------
+{
+  const activeFor = (overrides: Partial<MoodVector>): string[] => {
+    const seed = makeSeed('частицы');
+    const field = new FlowField();
+    field.reseed(seed);
+    const particles = new ParticleSystem(field);
+    particles.resize(1280, 720);
+    particles.reseed(seed, field);
+
+    const scene = new Scene();
+    scene.reseed(seed);
+    const config = { enabled: true, mode: 'auto' as const, manual: [], density: 0.6 };
+
+    let debug = { active: [] as string[], count: 0 };
+    for (let frame = 0; frame < 600; frame++) {
+      const mood = moodAt(frame * FRAME_MS, overrides);
+      debug = particles.update(mood, scene.update(mood, SCENE_CONFIG), config, FRAME_MS);
+    }
+    return debug.active;
+  };
+
+  const noisy = activeFor({ noisiness: 0.95, energy: 0.8, section: 'drop', flux: 0.6 });
+  check('на шумном материале включаются осколки или искры',
+    noisy.includes('shards') || noisy.includes('sparks'), `активны: ${noisy.join(', ')}`);
+
+  const quiet = activeFor({ noisiness: 0.03, energy: 0.1, brightness: 0.1, section: 'calm' });
+  check('в тишине включается взвесь', quiet.includes('dust'), `активны: ${quiet.join(', ')}`);
+
+  const trebly = activeFor({
+    bands: { low: 0.05, mid: 0.2, high: 1 }, energy: 0.6, brightness: 0.9, section: 'steady',
+  });
+  check('на плотном верхе включается дождь', trebly.includes('streaks'), `активны: ${trebly.join(', ')}`);
+
+  // Плотность действительно управляет количеством.
+  const countFor = (density: number): number => {
+    const seed = makeSeed('плотность');
+    const field = new FlowField();
+    field.reseed(seed);
+    const particles = new ParticleSystem(field);
+    particles.resize(1280, 720);
+    particles.reseed(seed, field);
+    const scene = new Scene();
+    scene.reseed(seed);
+    const config = { enabled: true, mode: 'manual' as const, manual: ['dust' as const], density };
+    let count = 0;
+    for (let frame = 0; frame < 300; frame++) {
+      const mood = moodAt(frame * FRAME_MS, { energy: 0.5, section: 'calm' });
+      count = particles.update(mood, scene.update(mood, SCENE_CONFIG), config, FRAME_MS).count;
+    }
+    return count;
+  };
+  const sparse = countFor(0.2);
+  const dense = countFor(1);
+  check('плотность управляет количеством частиц', dense > sparse * 1.5,
+    `${sparse} против ${dense}`);
 }
 
 console.log(failures === 0 ? '\nвсё сошлось' : `\nпроблем: ${failures}`);

@@ -129,7 +129,9 @@ export class BaseLayer {
       this.width / 2, this.height / 2, radius,
     );
     gradient.addColorStop(0, 'rgba(0,0,0,0)');
-    gradient.addColorStop(1, `rgba(0,0,0,${(0.55 - energy * 0.2).toFixed(3)})`);
+    // Слабая: основную виньетку теперь ведёт проход света, и она динамическая.
+    // Эта остаётся страховкой на случай, когда пост-конвейер недоступен.
+    gradient.addColorStop(1, `rgba(0,0,0,${(0.26 - energy * 0.1).toFixed(3)})`);
     ctx.save();
     ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = gradient;

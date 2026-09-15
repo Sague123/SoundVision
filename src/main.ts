@@ -181,6 +181,7 @@ class App {
       seed: stats.seedLabel,
       substance: `${SUBSTANCE_LABELS[substance.nearest]} ${substance.axis.toFixed(2)}`,
       harmony: stats.harmonyName,
+      particles: stats.transient.particleTypes.join(', '),
     });
   }
 

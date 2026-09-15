@@ -10,6 +10,8 @@ import type { DrawPrimitive, ModifierPrimitive, PrimitiveId, RenderFrame } from 
 import { ALL_PRIMITIVE_IDS } from './primitives/types.ts';
 import type { GeneratorSeed } from './seed.ts';
 import { RaymarchPrimitive } from './primitives/raymarch.ts';
+import { FlowFieldPrimitive } from './primitives/flow-field.ts';
+import type { FlowField } from './flow-field.ts';
 
 /** Ниже этого веса примитив не рисуем: платить за кадр ради невидимого нет смысла. */
 const MIN_VISIBLE_WEIGHT = 0.02;
@@ -60,6 +62,12 @@ export class GenreLayer {
   reseed(seed: GeneratorSeed): void {
     for (const primitive of this.drawables.values()) primitive.reseed(seed);
     for (const primitive of this.modifiers.values()) primitive.reseed(seed);
+  }
+
+  /** Общее поле потока сцены — его использует примитив flow field. */
+  useField(field: FlowField): void {
+    const flow = this.drawables.get('flow-field');
+    if (flow instanceof FlowFieldPrimitive) flow.useField(field);
   }
 
   /** Разрешение raymarch-шейдера: единственный примитив, который заметно зависит от него. */
