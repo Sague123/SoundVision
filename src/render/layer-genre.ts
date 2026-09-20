@@ -79,7 +79,7 @@ export class GenreLayer {
 
   /** @returns примитивы, реально нарисованные в этом кадре — для дебаг-оверлея. */
   render(
-    frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight' | 'tuning'>,
+    frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight' | 'tuning' | 'fade'>,
     state: GeneratorState,
     trails: number,
   ): PrimitiveId[] {
@@ -103,7 +103,9 @@ export class GenreLayer {
       const weight = state.weights.get(id) ?? 0;
       if (weight < MIN_VISIBLE_WEIGHT) continue;
       if (primitive instanceof RaymarchPrimitive && !primitive.available) continue;
-      primitive.draw({ ...frame, ctx, params: state.genreParams, tuning: tuningOf(state, id), weight });
+      primitive.draw({
+        ...frame, ctx, params: state.genreParams, tuning: tuningOf(state, id), weight, fade,
+      });
       active.push(id);
     }
 
@@ -120,6 +122,7 @@ export class GenreLayer {
           params: state.genreParams,
           tuning: tuningOf(state, 'kaleidoscope'),
           weight: clamp01(state.kaleidoscopeWeight),
+          fade,
         },
         this.content,
       );

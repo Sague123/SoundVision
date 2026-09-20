@@ -162,7 +162,7 @@ export class Compositor {
     this.applyQuality(mood.timeMs, settings);
     const state = this.generator.update(mood, settings, scene);
 
-    const frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight' | 'tuning'> = {
+    const frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight' | 'tuning' | 'fade'> = {
       width: this.width,
       height: this.height,
       mood,
