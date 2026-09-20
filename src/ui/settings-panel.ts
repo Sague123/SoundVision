@@ -787,6 +787,13 @@ export class SettingsPanel {
         get: () => s.generator.morphRate, set: (v) => { s.generator.morphRate = v; },
         def: d.generator.morphRate,
       })),
+      this.track(toggle({
+        label: 'Фиксировать seed',
+        get: () => s.generator.lockSeed, set: (v) => { s.generator.lockSeed = v; },
+        def: d.generator.lockSeed,
+        hint: 'Смена трека не меняет пул примитивов, симметрию и сдвиг палитры — '
+          + 'иначе при подборе параметров меняется всё сразу',
+      })),
       row(button('Reshuffle', () => this.handlers.onReshuffle(), 'panel__button--accent')),
       note('Reshuffle даёт тому же треку новую стартовую точку генератора.'),
     ]);

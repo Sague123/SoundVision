@@ -139,8 +139,8 @@ export class Compositor {
   }
 
   /** @returns true, если seed сменился и слои были переинициализированы. */
-  setTrack(artist: string | null, title: string | null): boolean {
-    const changed = this.generator.setTrack(trackKey(artist, title));
+  setTrack(artist: string | null, title: string | null, lockSeed = false): boolean {
+    const changed = this.generator.setTrack(trackKey(artist, title), lockSeed);
     if (changed) this.reseedLayers();
     return changed;
   }

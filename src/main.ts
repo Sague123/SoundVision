@@ -217,7 +217,9 @@ class App {
     this.nowPlaying.onChange((track, changed) => {
       void this.coverLoader.load(track?.coverUrl ?? null);
       if (!changed) return;
-      this.compositor.setTrack(track?.artist ?? null, track?.title ?? null);
+      this.compositor.setTrack(
+        track?.artist ?? null, track?.title ?? null, this.settings.generator.lockSeed,
+      );
       void this.loadLyrics(track);
     });
   }

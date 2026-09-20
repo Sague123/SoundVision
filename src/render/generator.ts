@@ -210,7 +210,10 @@ export class Generator {
   }
 
   /** Новый трек — новый seed, но веса не обнуляем: переход остаётся плавным. */
-  setTrack(trackKeyValue: string): boolean {
+  setTrack(trackKeyValue: string, lockSeed = false): boolean {
+    // С зафиксированным seed трек меняется, а генератор — нет: так видно,
+    // что именно изменила настройка, а не смена пула примитивов.
+    if (lockSeed) return false;
     if (trackKeyValue === this.key) return false;
     this.key = trackKeyValue;
     this.salt = 0;
