@@ -38,12 +38,18 @@ export const PARTICLE_LABELS: Record<ParticleType, string> = {
 /** Общий потолок: выше этого Canvas 2D перестаёт укладываться в кадр. */
 const MAX_PARTICLES = 1400;
 /** Сколько типов живёт одновременно — по секциям, как и у примитивов. */
-const ACTIVE_TYPES: Record<MoodVector['section'], number> = {
-  calm: 2,
-  steady: 2,
-  buildup: 3,
-  drop: 3,
-};
+/**
+ * Постоянный тип частиц ровно один.
+ *
+ * Раньше их было два-три — тот же «N активных одновременно», от которого
+ * ушла система фокуса, только для частиц. По иерархии ролей частицы
+ * привязаны к соло и не самостоятельны: два независимых типа поверх соло
+ * возвращают ровно ту кашу, из-за которой глазу не за что зацепиться.
+ *
+ * Вдобавок к нему разрешён один ударный тип: он рождается только в момент
+ * импульса и между ударами ничего не рисует, так что кадр не загромождает.
+ */
+const AMBIENT_TYPES = 1;
 /** Длина хвоста у лент. */
 const RIBBON_TRAIL = 9;
 
@@ -185,8 +191,11 @@ export class ParticleSystem {
         + ((this.weights.get(type) ?? 0) > 0.15 ? 0.07 : 0)),
     })).sort((a, b) => b.score - a.score);
 
-    const count = ACTIVE_TYPES[mood.section];
-    const winners = new Set(scored.slice(0, count).map((entry) => entry.type));
+    const winners = new Set(scored.slice(0, AMBIENT_TYPES).map((entry) => entry.type));
+    // Лучший ударный тип — вдобавок к постоянному: он спавнится только на
+    // импульсе, поэтому не считается вторым «активным» типом в кадре.
+    const burst = scored.find((entry) => BURST_TYPES.has(entry.type));
+    if (burst) winners.add(burst.type);
     for (const entry of scored) {
       const target = winners.has(entry.type) ? Math.max(0.25, entry.score) : 0;
       this.weights.set(entry.type, lerp(this.weights.get(entry.type) ?? 0, target, k));

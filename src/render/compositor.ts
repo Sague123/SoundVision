@@ -123,10 +123,12 @@ export class Compositor {
     // проходам (свечение, размытие), но не самой картинке.
     this.width = Math.max(1, Math.round(cssWidth * dpr));
     this.height = Math.max(1, Math.round(cssHeight * dpr));
+    // Атрибуты задают разрешение буфера, CSS — размер коробки. Инлайновый
+    // style.width здесь стоять не должен: размер холста берётся из вёрстки
+    // (открытая панель ужимает сцену), и запись обратно в style замыкала бы
+    // измерение само на себя — холст залипал на дефолтных 300x150.
     this.canvas.width = this.width;
     this.canvas.height = this.height;
-    this.canvas.style.width = `${cssWidth}px`;
-    this.canvas.style.height = `${cssHeight}px`;
 
     this.composed.width = this.width;
     this.composed.height = this.height;

@@ -75,12 +75,21 @@ export class BaseLayer {
 
     const primitive = this.primitives.get(state.baseId);
     if (primitive && state.baseWeight > 0.01) {
+      /*
+       * Вклад за кадр делится на затухание.
+       *
+       * Слой со следами копит: если каждый кадр добавлять `baseWeight`, а
+       * гасить на `fade`, установившаяся яркость выходит `baseWeight / fade`
+       * — при длинных следах это единица, то есть белое. Из-за этого фон
+       * светил наравне с соло, хотя по иерархии ролей ему положено 5-10%.
+       * С делением установившееся значение равно ровно `baseWeight`.
+       */
       primitive.draw({
         ...frame,
         ctx,
         params: state.baseParams,
         tuning: state.tunings.get(state.baseId) ?? {},
-        weight: state.baseWeight,
+        weight: state.baseWeight * fade,
       });
     }
 

@@ -21,8 +21,36 @@ import { defaultSettings } from '../src/settings.ts';
 import type { Section } from '../src/audio/features.ts';
 
 const SECTIONS: Section[] = ['calm', 'steady', 'buildup', 'drop'];
+/** Заглушка на случай, когда 2D-контекст для замера недоступен. */
+const EMPTY_METRICS: FrameMetrics = {
+  width: 0, height: 0, fill: 0, floor: 0, median: 0, top2: 0, contrast: 0, midMass: 0, bright: 0,
+};
 /** Сколько кадров держим каждую пару «примитив × секция». */
 const FRAMES_PER_STAGE = 45;
+
+/**
+ * Метрики кадра из §8. Считаются по холсту в его физическом размере: именно
+ * так видно и пикселизацию, и мутность — на масштабированном снимке обе
+ * пропадают.
+ */
+export interface FrameMetrics {
+  /** Физический размер холста: подтверждение, что замер не по CSS-пикселям. */
+  width: number;
+  height: number;
+  /** Доля пикселей ярче фона. На спокойных участках должна быть ниже 30%. */
+  fill: number;
+  /** Яркость фона: четверть самых тёмных пикселей. Правило §2 — ниже 0.08. */
+  floor: number;
+  median: number;
+  /** Порог верхних 2% яркости. */
+  top2: number;
+  /** Отношение верхних 2% к медиане: у референсов оно очень высокое. */
+  contrast: number;
+  /** Масса в средних тонах — прямой признак мутной картинки. */
+  midMass: number;
+  /** Доля очень ярких пикселей: их должно быть 2-3%, а не половина кадра. */
+  bright: number;
+}
 
 interface SmokeReport {
   done: boolean;
@@ -30,10 +58,27 @@ interface SmokeReport {
   /** В скольких кадрах реально отработал пост-конвейер. */
   warpFrames: number;
   errors: string[];
-  stages: Array<{ primitive: PrimitiveId; section: Section; avgFrameMs: number; rendered: string[] }>;
+  stages: Array<{
+    primitive: PrimitiveId;
+    section: Section;
+    avgFrameMs: number;
+    rendered: string[];
+    metrics: FrameMetrics;
+  }>;
+  /** Типы частиц, живые в последнем кадре. */
+  particleTypes: string[];
+  /** Метрики текущего кадра — их читает внешний прогон в режиме `?only=`. */
+  metrics: FrameMetrics | null;
+  /** Снимок холста в нативном разрешении, data URL. */
+  snapshot(): string;
 }
 
-const report: SmokeReport = { done: false, frames: 0, warpFrames: 0, errors: [], stages: [] };
+const report: SmokeReport = {
+  done: false, frames: 0, warpFrames: 0, errors: [], stages: [],
+  metrics: null,
+  particleTypes: [],
+  snapshot: () => canvas.toDataURL('image/png'),
+};
 (window as unknown as { __smoke: SmokeReport }).__smoke = report;
 
 window.addEventListener('error', (event) => report.errors.push(String(event.message)));
@@ -55,6 +100,9 @@ compositor.resize(window.innerWidth, window.innerHeight, 1);
 
 const settings = defaultSettings();
 settings.generator.mode = 'manual';
+// Настройки наружу: без них нельзя выяснить, кто именно нарисовал деталь в
+// кадре — примитив, частицы или свет. А это первый вопрос при разборе.
+(window as unknown as { __settings: typeof settings }).__settings = settings;
 
 
 const params = new URLSearchParams(window.location.search);
@@ -193,6 +241,57 @@ function synthesize(timeMs: number, section: Section): MoodVector {
 }
 
 /**
+ * Замер кадра. Холст копируется как есть, без масштабирования: снимок в
+ * нативном разрешении — единственный способ увидеть пикселизацию, а по нему
+ * же считаются заполненность, контраст и форма гистограммы.
+ */
+const probe = document.createElement('canvas');
+const probeCtx = probe.getContext('2d', { willReadFrequently: true });
+
+function measure(): FrameMetrics | null {
+  if (!probeCtx) return null;
+  probe.width = canvas.width;
+  probe.height = canvas.height;
+  probeCtx.drawImage(canvas, 0, 0);
+
+  const data = probeCtx.getImageData(0, 0, probe.width, probe.height).data;
+  const total = data.length / 4;
+  const lumas = new Float32Array(total);
+  // Гистограмма на 64 корзины: по ней видно, двугорбая картинка или мутная.
+  const bins = new Uint32Array(64);
+  let lit = 0;
+  let bright = 0;
+
+  for (let i = 0, n = 0; i < data.length; i += 4, n++) {
+    const luma = (data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722) / 255;
+    lumas[n] = luma;
+    bins[Math.min(63, Math.floor(luma * 64))]++;
+    // 0.06 — порог «ярче фона»: ниже него лежит и чёрный, и остаточная дымка.
+    if (luma > 0.06) lit++;
+    if (luma > 0.75) bright++;
+  }
+
+  lumas.sort();
+  const at = (share: number): number => lumas[Math.min(total - 1, Math.floor(total * share))];
+  let mid = 0;
+  for (let i = 12; i < 40; i++) mid += bins[i];
+
+  const median = at(0.5);
+  const top2 = at(0.98);
+  return {
+    width: probe.width,
+    height: probe.height,
+    fill: lit / total,
+    floor: at(0.25),
+    median,
+    top2,
+    contrast: top2 / Math.max(1e-4, median),
+    midMass: mid / total,
+    bright: bright / total,
+  };
+}
+
+/**
  * Виртуальные часы вместо реального времени.
  *
  * Под софтверным рендером кадры идут неровно, и на реальных часах настроение
@@ -226,6 +325,7 @@ function frame(): void {
     });
     frameMsTotal += stats.frameMs;
     if (stats.postActive) report.warpFrames++;
+    report.particleTypes = stats.transient.particleTypes;
     for (const id of stats.activePrimitives) renderedInStage.add(id);
   } catch (err) {
     report.errors.push(`${stage.primitive}/${stage.section}: ${(err as Error).message}`);
@@ -234,6 +334,10 @@ function frame(): void {
 
   report.frames++;
   frameInStage++;
+  // Мерить каждый кадр дорого и незачем: метрика нужна на прогретой стадии.
+  if (frameInStage === framesPerStage || (held && frameInStage % 60 === 0)) {
+    report.metrics = measure();
+  }
   label.textContent = held
     ? `${stage.primitive} / ${stage.section} — кадр ${frameInStage}`
     : `${stage.primitive} / ${stage.section} — ${frameInStage}/${stageFrames}`;
@@ -246,6 +350,7 @@ function frame(): void {
       section: stage.section,
       avgFrameMs: frameMsTotal / Math.max(1, frameInStage),
       rendered: [...renderedInStage],
+      metrics: report.metrics ?? measure() ?? EMPTY_METRICS,
     });
     stageIndex++;
     frameInStage = 0;

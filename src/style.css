@@ -40,11 +40,22 @@ body.idle {
   --panel-width: min(420px, 45vw);
 }
 
+/*
+ * Коробку холста задаёт вёрстка, разрешение буфера — атрибуты width/height.
+ *
+ * Размер именно через `width`, а не через `inset`: canvas — замещаемый
+ * элемент, и у абсолютно позиционированного замещаемого элемента `width: auto`
+ * разрешается в собственный размер (те самые 300x150 по умолчанию), а правый
+ * отступ просто игнорируется как переопределение.
+ */
 .stage {
   position: absolute;
-  inset: 0 var(--panel-width) 0 0;
+  top: 0;
+  left: 0;
   display: block;
-  transition: right 0.28s ease;
+  width: calc(100% - var(--panel-width));
+  height: 100%;
+  transition: width 0.28s ease;
 }
 
 /* --- Старт-экран --- */

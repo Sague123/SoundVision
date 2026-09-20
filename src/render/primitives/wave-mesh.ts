@@ -47,21 +47,29 @@ export class WaveMeshPrimitive implements DrawPrimitive {
     this.drift += (frame.dtMs / 1000) * (0.05 + params.speed * 0.5) * tuning.flow;
 
     const spectrum = mood.spectrum;
-    const amplitude = this.height * (0.02 + params.scale * 0.05) * (0.5 + mood.energy * 1.2)
-      * tuning.amplitude;
     const noiseScale = (0.9 + params.chaos * 2.5) * tuning.noiseScale;
 
-    /**
-     * Ткань держится на том, что линии не пересекаются: соседние идут через
-     * `height * 0.84 / lines`, и размах больше половины этого шага сплавляет
-     * их в заливку. Поэтому амплитуда ограничена шагом, а не только настройкой.
+    /*
+     * Вся яркость референса — в местах, где линии сгущаются: там аддитивное
+     * смешивание само складывает их до белого. Сгущение берётся не из
+     * случайности, а из производной формы полотна по номеру линии: там, где
+     * полотно круто уходит вверх, соседние линии сходятся.
+     *
+     * Значит, размах обязан быть соизмерим со всей высотой кадра, а не с
+     * шагом между линиями. С маленьким размахом полотно просто едет целиком,
+     * линии идут строго параллельно, и на экране ровное тусклое поле — ровно
+     * это и показывал замер: верхние 2% яркости отличались от медианы втрое,
+     * то есть ни одна линия ни разу не легла на другую.
      */
+    const amplitude = this.height * (0.1 + params.scale * 0.3) * (0.5 + mood.energy * 0.8)
+      * tuning.amplitude;
     const spacing = (this.height * 0.84) / Math.max(1, lines - 1);
-    const safeAmplitude = Math.min(amplitude, spacing * 0.45);
+    // Потолок — чтобы полотно не выезжало за кадр целиком.
+    const safeAmplitude = Math.min(amplitude, this.height * 0.42);
 
-    // Та же логика постоянной «краски», что у ландшафта: сто аддитивных линий
-    // с непрозрачностью одной дают сплошное поле вместо ткани.
-    const ink = Math.min(1, 24 / lines);
+    // Та же логика постоянной «краски», что у ландшафта, но с запасом на
+    // перекрытие: в сгущениях несколько линий должны складываться до белого.
+    const ink = Math.min(1, 30 / lines);
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -71,9 +79,13 @@ export class WaveMeshPrimitive implements DrawPrimitive {
     for (let line = 0; line < lines; line++) {
       const v = line / (lines - 1);
       const baseY = this.height * (0.08 + v * 0.84);
-      // Сдвиг фазы по номеру линии — из-за него поток «течёт» поперёк, а не
-      // колеблется одинаково по всей высоте.
-      const linePhase = v * (1.5 + params.warp * 4);
+      /*
+       * Сдвиг фазы по номеру линии держим маленьким: полотно должно остаться
+       * связным. Большой сдвиг давал каждой линии независимую форму — они
+       * пересекались во всех направлениях, тканевая структура пропадала, а
+       * сгущений всё равно не возникало.
+       */
+      const linePhase = v * (0.2 + params.warp * 0.5);
 
       ctx.strokeStyle = palette.accentAlpha(v, (0.08 + mood.energy * 0.22) * weight * ink);
       ctx.beginPath();
@@ -93,7 +105,13 @@ export class WaveMeshPrimitive implements DrawPrimitive {
         // порядку, что и плавная форма от шума.
         const detail = spectrum[bin] * 12;
 
-        const y = baseY + (smooth + detail * tuning.spectrumMix * 2) * safeAmplitude;
+        /*
+         * Деталь от спектра идёт с долей шага между линиями, а не с полным
+         * размахом: она добавляет фактуру, но не должна рвать порядок линий
+         * по вертикали — иначе вместо ткани получается клубок.
+         */
+        const y = baseY + smooth * safeAmplitude
+          + detail * tuning.spectrumMix * spacing * 0.8;
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }

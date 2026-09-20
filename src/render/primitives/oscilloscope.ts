@@ -66,15 +66,20 @@ export class OscilloscopePrimitive implements DrawPrimitive {
     trace.globalCompositeOperation = 'lighter';
     trace.lineWidth = Math.max(1, (0.9 + params.sharpness * 0.8) * tuning.lineWidth);
     trace.lineJoin = 'round';
-    trace.strokeStyle = palette.accentAlpha(0.85, (0.25 + mood.energy * 0.5) * weight);
+    // След копится в холсте послесвечения, поэтому мазок за кадр обязан быть
+    // слабым: на полной непрозрачности центр фигуры выгорал в белое пятно, и
+    // от самой кривой ничего не оставалось.
+    trace.strokeStyle = palette.accentAlpha(0.85, (0.06 + mood.energy * 0.16) * weight);
 
     const left = mood.waveform;
     const right = mood.stereo ? mood.waveformRight : mood.waveform;
     const points = Math.min(TRACE_POINTS, left.length);
     const cx = this.width / 2;
     const cy = this.height / 2;
-    const gain = Math.min(this.width, this.height) * (0.2 + params.scale * 0.24)
-      * (0.6 + mood.energy * 0.9) * tuning.gain;
+    // Фигура должна занимать кадр, а не висеть точкой посередине: минимум
+    // держим высоким, а энергия только добавляет сверху.
+    const gain = Math.min(this.width, this.height) * (0.3 + params.scale * 0.26)
+      * (0.85 + mood.energy * 0.5) * tuning.gain;
 
     // Режим берётся из настройки, seed решает только когда она на середине.
     const xyMode = tuning.lissajous > 0.5 || (tuning.lissajous > 0.25 && this.xyMode);

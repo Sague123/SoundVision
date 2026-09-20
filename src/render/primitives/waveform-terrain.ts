@@ -68,7 +68,7 @@ export class WaveformTerrainPrimitive implements DrawPrimitive {
      * держится на том, что линии видно по отдельности. Поэтому непрозрачность
      * делится на число строк, и глубина меняет детализацию, а не яркость.
      */
-    const rowInk = Math.min(1, 26 / rows);
+    const bulkInk = Math.min(1, 26 / rows);
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -87,15 +87,24 @@ export class WaveformTerrainPrimitive implements DrawPrimitive {
       const offset = ((this.writeIndex - 1 - row + MAX_HISTORY) % MAX_HISTORY) * SAMPLES;
       const tone = 0.15 + age * 0.7;
 
+      /*
+       * Делить непрозрачность поровну между всеми строками нельзя: получается
+       * ровное тусклое поле без единой яркой точки, а гистограмма — один горб
+       * в тенях. В референсе передний гребень почти белый, а вглубь всё
+       * быстро гаснет. Поэтому ближние строки идут почти на полной яркости, и
+       * только хвост уходит в общую «краску».
+       */
+      const ink = bulkInk + (1 - bulkInk) * fade ** 5;
+
       ctx.lineWidth = Math.max(1, (1.2 - age) * (0.8 + params.sharpness * 0.6) * tuning.lineWidth);
-      ctx.strokeStyle = palette.accentAlpha(tone, (0.1 + mood.energy * 0.35) * fade * weight * rowInk);
+      ctx.strokeStyle = palette.accentAlpha(tone, (0.1 + mood.energy * 0.35) * fade * weight * ink);
       this.strokeRow(ctx, offset, y, amplitude, shrink, false);
       ctx.stroke();
 
       // Отражение: слабее и ниже горизонта, даёт «воду» из референса.
       const reflection = tuning.reflection * params.trail;
       if (reflection > 0.08) {
-        ctx.strokeStyle = palette.accentAlpha(tone, (0.05 + mood.energy * 0.14) * fade * weight * reflection * rowInk);
+        ctx.strokeStyle = palette.accentAlpha(tone, (0.05 + mood.energy * 0.14) * fade * weight * reflection * ink);
         this.strokeRow(ctx, offset, horizon + (horizon - y) * 0.75, amplitude * 0.8, shrink, true);
         ctx.stroke();
       }
