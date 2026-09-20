@@ -428,6 +428,15 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.transients.slice = false;
       s.transients.chromaticBurst = false;
       s.deformation.amount = 0.45;
+      // Живой звук: широкий штрих, глубокий ландшафт, длинное послесвечение —
+      // картинка должна держать удар, а не рассыпаться на мелкую сетку.
+      s.primitives['waveform-terrain'].params.depth = 150;
+      s.primitives['waveform-terrain'].params.verticalGain = 1.3;
+      s.primitives['waveform-terrain'].params.lineWidth = 1.4;
+      s.primitives.oscilloscope.params.persistence = 0.75;
+      s.primitives.spectrum.params.glitch = 0.2;
+      s.primitives.spectrum.params.rainbow = 0;
+      s.primitives['l-system'].params.depth = 6;
     },
   },
   {
@@ -446,6 +455,16 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.memory.feedback = 0.75;
       s.light.bloom = 0.7;
       s.light.rays = 0.5;
+      // Сетка мелкая и частая, глитч на полную, радуга по частоте — здесь
+      // она к месту, потому что читается как легенда спектра.
+      s.primitives.spectrum.params.bars = 256;
+      s.primitives.spectrum.params.glitch = 1;
+      s.primitives.spectrum.params.gap = 0.55;
+      s.primitives['wave-mesh'].params.lines = 140;
+      s.primitives['wave-mesh'].params.flow = 1.6;
+      s.primitives['wave-mesh'].params.spectrumMix = 0.8;
+      s.primitives.oscilloscope.params.persistence = 0.45;
+      s.primitives.metaballs.params.shells = 3;
     },
   },
   {
@@ -481,6 +500,14 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.memory.feedback = 0.15;
       s.light.bloom = 0.5;
       s.light.rays = 0.08;
+      // Сам сигнал и ничего вокруг: глубокая история, сильное отражение,
+      // заметный «дождь» от гребней.
+      s.primitives['waveform-terrain'].params.depth = 170;
+      s.primitives['waveform-terrain'].params.reflection = 0.85;
+      s.primitives['waveform-terrain'].params.rain = 0.75;
+      s.primitives['waveform-terrain'].params.perspective = 0.6;
+      s.primitives.oscilloscope.params.gain = 1.25;
+      s.primitives['radial-waveform'].params.rings = 3;
     },
   },
   {
@@ -501,7 +528,14 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.deformation.amount = 0.2;
       s.palette.tuning.lightnessBoost = 1.15;
       s.palette.tuning.chromaBoost = 0.9;
-      for (const id of ALL_PRIMITIVE_IDS) s.primitives[id].params.lineWidth = 1;
+      // Линия ровно в один физический пиксель у всех, кто её рисует.
+      for (const id of ALL_PRIMITIVE_IDS) {
+        if ('lineWidth' in s.primitives[id].params) s.primitives[id].params.lineWidth = 1;
+      }
+      // Меньше линий — каждая видна отдельно, а не сливается с соседней.
+      s.primitives['wave-mesh'].params.lines = 70;
+      s.primitives['waveform-terrain'].params.depth = 70;
+      s.primitives.spectrum.params.gap = 0.7;
     },
   },
   {
@@ -522,6 +556,13 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.transients.strobe = false;
       s.memory.smear = 0.1;
       s.generator.morphRate = 0.6;
+      // Медленные примитивы: движение внутри кадра тоже укачивает.
+      s.primitives['wave-mesh'].params.flow = 0.35;
+      s.primitives['flow-field'].params.speed = 0.4;
+      s.primitives.metaballs.params.speed = 0.4;
+      s.primitives.voronoi.params.speed = 0.35;
+      s.primitives['radial-waveform'].params.spin = 0.3;
+      s.primitives.cellular.params.speed = 0.5;
     },
   },
   {
@@ -547,6 +588,15 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.light.bloom = 0.4;
       s.light.rays = 0.2;
       s.light.flare = false;
+      // Фон не должен притягивать взгляд: редкие тонкие линии, медленный ход.
+      s.primitives['wave-mesh'].params.lines = 60;
+      s.primitives['wave-mesh'].params.flow = 0.5;
+      s.primitives['wave-mesh'].params.amplitude = 0.7;
+      s.primitives['waveform-terrain'].params.depth = 60;
+      s.primitives['waveform-terrain'].params.rain = 0.2;
+      s.primitives.spectrum.params.glitch = 0;
+      s.primitives.spectrum.params.barHeight = 0.6;
+      s.primitives.oscilloscope.params.persistence = 0.8;
     },
   },
 ];
