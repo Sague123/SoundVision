@@ -614,16 +614,41 @@ body.idle {
   text-transform: uppercase;
 }
 
+/*
+ * Подпись со значением — своя строка, поле ввода — следующая.
+ *
+ * Раньше это была сетка в три колонки, и подпись делила строку с полем. С
+ * подсказками и кнопкой сброса подписи стали длиннее, и полям оставалось
+ * меньше трети ширины: текст в них обрезался на втором слове.
+ */
 .panel__control {
-  display: grid;
-  grid-template-columns: 1fr 120px 44px;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 9px;
 }
 
+.panel__head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  justify-content: space-between;
+}
+
+.panel__head .panel__label {
+  flex: 1;
+  min-width: 0;
+}
+
+/* У флажка подпись идёт рядом с ним, а не над ним. */
 .panel__control--toggle {
-  grid-template-columns: 18px 1fr;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel__control--toggle .panel__head {
+  flex: 1;
 }
 
 .panel__label {
@@ -644,7 +669,7 @@ body.idle {
 
 .panel__control input[type='text'],
 .panel__control select {
-  grid-column: 2 / span 2;
+  width: 100%;
   padding: 5px 8px;
   border: 1px solid var(--ui-border);
   border-radius: 7px;
@@ -762,12 +787,6 @@ body.idle {
 
 .panel__section--collapsed .panel__content {
   display: none;
-}
-
-.panel__head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .panel__reset {
