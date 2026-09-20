@@ -886,5 +886,48 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
     `${names.length} шт.: ${names.join(', ')}`);
 }
 
+// --- 24. Частицы: один постоянный тип, не набор ------------------------------
+{
+  // По иерархии ролей частицы привязаны к соло и не самостоятельны. Два
+  // независимых постоянных типа поверх соло возвращают ту же кашу, от которой
+  // ушла система фокуса, поэтому счёт проверяем прямо.
+  const worst = { count: 0, section: '' as string, types: [] as string[] };
+  for (const section of ['calm', 'steady', 'buildup', 'drop'] as const) {
+    const seed = makeSeed(`частицы-${section}`);
+    const field = new FlowField();
+    field.reseed(seed);
+    const particles = new ParticleSystem(field);
+    particles.resize(1280, 720);
+    particles.reseed(seed, field);
+    const scene = new Scene();
+    scene.reseed(seed);
+    const config = {
+      enabled: true, mode: 'auto' as const, manual: [], density: 0.6,
+      life: 1, speed: 1, size: 1,
+    };
+
+    let active: string[] = [];
+    for (let frame = 0; frame < 600; frame++) {
+      const hit = frame % 30 === 0;
+      const mood = moodAt(frame * FRAME_MS, {
+        energy: section === 'drop' ? 0.9 : 0.4,
+        section,
+        onset: hit,
+        onsetStrength: hit ? 0.8 : 0,
+        onsetProfile: hit ? { low: 0.8, mid: 0.5, high: 0.3 } : { low: 0, mid: 0, high: 0 },
+      });
+      active = particles.update(mood, scene.update(mood, SCENE_CONFIG), config, FRAME_MS).active;
+    }
+    if (active.length > worst.count) {
+      worst.count = active.length;
+      worst.section = section;
+      worst.types = active;
+    }
+  }
+  // Постоянный тип один плюс ударный, который между ударами ничего не рисует.
+  check('частиц не больше двух типов разом', worst.count <= 2,
+    `максимум ${worst.count} в секции ${worst.section}: ${worst.types.join(', ')}`);
+}
+
 console.log(failures === 0 ? '\nвсё сошлось' : `\nпроблем: ${failures}`);
 process.exit(failures === 0 ? 0 : 1);

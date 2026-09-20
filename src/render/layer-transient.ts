@@ -137,11 +137,23 @@ export class TransientLayer {
 
     for (const ring of this.rings) {
       const life = ring.life / ring.maxLife;
-      // Фронт волны от эха уходит в комплементарный цвет и гаснет.
+      /*
+       * Фронт — тонкая яркая линия, а не широкая полоса.
+       *
+       * Раньше кольцо было до девяти физических пикселей при непрозрачности
+       * 0.75 и жило почти секунду: при ударах в темпе на экране постоянно
+       * висели два-три таких обруча, и они спорили с соло за внимание. По
+       * правилам §2 линия — один-два пикселя, а яркость набирается за счёт
+       * того, что линия яркая, а не толстая.
+       *
+       * Квадрат по времени жизни вместо линейного затухания: удар должен
+       * читаться вспышкой на фронте и быстро уходить, а не тлеть весь такт.
+       */
+      const fade = life * life;
       ctx.strokeStyle = ring.echo
-        ? palette.echo(1 - life, life * 0.8 * weight)
-        : palette.accentAlpha(ring.tone, life * 0.75 * weight);
-      ctx.lineWidth = Math.max(0.6, life * 9);
+        ? palette.echo(1 - life, fade * 0.7 * weight)
+        : palette.accentAlpha(ring.tone, fade * 0.65 * weight);
+      ctx.lineWidth = Math.max(1, 1 + life * 1.6);
       ctx.beginPath();
       ctx.arc(ring.x, ring.y, ring.radius, 0, Math.PI * 2);
       ctx.stroke();
