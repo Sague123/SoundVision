@@ -24,6 +24,7 @@ import { ALL_PRIMITIVE_IDS } from '../src/render/primitives/types.ts';
 import { PRIMITIVE_PARAMS, resolvePrimitiveParams } from '../src/render/primitives/tuning.ts';
 import { exportPresets } from '../src/ui/presets.ts';
 import { makeSeed } from '../src/render/seed.ts';
+import { ContourBuilder } from '../src/render/contour.ts';
 import type { NoteName } from '../src/audio/chroma.ts';
 import type { BandProfile } from '../src/audio/features.ts';
 
@@ -940,6 +941,43 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
   // Постоянный тип один плюс ударный, который между ударами ничего не рисует.
   check('частиц не больше двух типов разом', worst.count <= 2,
     `максимум ${worst.count} в секции ${worst.section}: ${worst.types.join(', ')}`);
+}
+
+// --- Контуры сшиваются в полилинии --------------------------------------------
+{
+  /**
+   * Огранка контуров уходит только если отрезки marching squares сшиты:
+   * круг обязан собраться в одну замкнутую линию из всех своих отрезков, два
+   * круга — ровно в две.
+   */
+  const cols = 64;
+  const rows = 48;
+  const field = new Float32Array(cols * rows);
+  const fill = (centres: Array<[number, number]>) => {
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        let v = 0;
+        for (const [cx, cy] of centres) v = Math.max(v, 1 - Math.hypot(x - cx, y - cy) / 10);
+        field[y * cols + x] = v;
+      }
+    }
+  };
+  const builder = new ContourBuilder();
+  fill([[32, 24]]);
+  builder.build(field, cols, rows, 0.5);
+  builder.chain();
+  const pts = builder.chainPoints;
+  const end = builder.chainOffsets[1] - 1;
+  const closed = Math.hypot(pts[0] - pts[end * 2], pts[1] - pts[end * 2 + 1]) < 1e-4;
+  const onePass = builder.chainOffsets[1] === builder.length + 1;
+  check('контур круга сшит в одну замкнутую линию',
+    builder.chains === 1 && closed && onePass,
+    `линий ${builder.chains}, отрезков ${builder.length}, точек ${builder.chainOffsets[1]}`);
+
+  fill([[16, 24], [48, 24]]);
+  builder.build(field, cols, rows, 0.5);
+  builder.chain();
+  check('два круга — две линии', builder.chains === 2, `линий ${builder.chains}`);
 }
 
 console.log(failures === 0 ? '\nвсё сошлось' : `\nпроблем: ${failures}`);
