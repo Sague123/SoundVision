@@ -53,6 +53,15 @@ const lineWidth: ParamSpec = {
 };
 
 export const PRIMITIVE_PARAMS: Record<PrimitiveId, readonly ParamSpec[]> = {
+  'wave-grid-3d': [
+    gain('amplitude', 'Размах волны'),
+    share('core', 'Яркость ядра', 0.9, 'Белая сердцевина линии — ею набирается вся яркость'),
+    share('grid', 'Сетка пола', 0.8),
+    share('reflection', 'Отражение в полу', 0.7),
+    share('horizon', 'Высота горизонта', 0.5, 'Выше — больше пола в кадре'),
+    gain('flow', 'Скорость сетки'),
+    lineWidth,
+  ],
   'waveform-terrain': [
     { key: 'depth', label: 'Глубина истории', min: 20, max: 190, step: 5, def: 120, format: 'plain',
       hint: 'Сколько кадров волны уходит вглубь' },

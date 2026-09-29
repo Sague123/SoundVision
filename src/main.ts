@@ -50,6 +50,9 @@ class App {
   private lastStatusMs = 0;
   private lyricsStatus = 'нет трека';
   private lyricsAbort: AbortController | null = null;
+  /** Когда начали отсчёт позиции у ручного трека. */
+  private manualStartedAt = 0;
+  private manualIdentity = '';
   private cursorTimer = 0;
   /** Какие гарнитуры реально подгрузились и содержат кириллицу. */
   private fontStatus = 'загружаются…';
@@ -60,7 +63,12 @@ class App {
     this.compositor = new Compositor(this.canvas);
 
     this.panel = new SettingsPanel(this.settings, {
-      onChange: () => this.persist(),
+      onChange: () => {
+        this.persist();
+        // Только ручной трек: applySources целиком дёргал бы Spotify и мост
+        // на каждое движение любого ползунка.
+        this.applyManualTrack();
+      },
       onReshuffle: () => this.compositor.reshuffle(),
       onSpotifyConnect: () => void this.connectSpotify(),
       onSpotifyDisconnect: () => {
@@ -253,6 +261,43 @@ class App {
 
     if (this.settings.sources.bridge) this.bridge.start(this.settings.sources.bridgeUrl);
     else this.bridge.stop();
+
+    this.applyManualTrack();
+  }
+
+  /**
+   * Трек, введённый руками, в общий поток «что сейчас играет».
+   *
+   * Позицию ведём сами от момента ввода: у ручного трека нет источника,
+   * который бы её сообщал, а тексту песни позиция нужна на каждом кадре.
+   * Поэтому «играет» начинается в момент, когда поле заполнили.
+   */
+  private applyManualTrack(): void {
+    const { manualArtist, manualTitle, manualDurationSec } = this.settings.sources;
+    const artist = manualArtist.trim();
+    const title = manualTitle.trim();
+    if (!title) {
+      this.nowPlaying.update('manual', null);
+      this.manualStartedAt = 0;
+      return;
+    }
+
+    const identity = `${artist}|${title}|${manualDurationSec}`;
+    if (identity !== this.manualIdentity) {
+      this.manualIdentity = identity;
+      this.manualStartedAt = performance.now();
+    }
+
+    this.nowPlaying.update('manual', {
+      title,
+      artist,
+      coverUrl: null,
+      progressMs: 0,
+      durationMs: Math.max(0, manualDurationSec) * 1000,
+      isPlaying: true,
+      source: 'manual',
+      receivedAt: this.manualStartedAt,
+    });
   }
 
   /**

@@ -16,6 +16,10 @@
 import '../src/style.css';
 import { idleMood, type MoodVector } from '../src/audio/mood-vector.ts';
 import { Compositor } from '../src/render/compositor.ts';
+import { NowPlayingCard } from '../src/ui/now-playing-card.ts';
+import { LyricsOverlay } from '../src/ui/lyrics-overlay.ts';
+import { SyncEngine } from '../src/lyrics/sync-engine.ts';
+import type { NowPlayingTrack } from '../src/cover/now-playing.ts';
 import { ALL_PRIMITIVE_IDS, type PrimitiveId } from '../src/render/primitives/types.ts';
 import { defaultSettings } from '../src/settings.ts';
 import type { Section } from '../src/audio/features.ts';
@@ -94,6 +98,52 @@ root.append(canvas);
 const label = document.createElement('div');
 label.style.cssText = 'position:absolute;top:12px;left:12px;font:13px monospace;color:#fff;z-index:5';
 root.append(label);
+
+/*
+ * Карточка трека и текст песни.
+ *
+ * Раньше смоук рисовал только холст, и всю композицию целиком — визуал плюс
+ * обложка, название и строка текста — не видел никто, включая меня. А именно
+ * она и есть то, что смотрит человек: в живом приложении без подключённого
+ * Spotify или моста имени трека просто нет, и половина кадра не появляется.
+ * Поэтому здесь подставляется фиктивный трек с фиктивным текстом.
+ */
+const card = new NowPlayingCard();
+const lyricsOverlay = new LyricsOverlay();
+const syncEngine = new SyncEngine();
+root.append(lyricsOverlay.element, card.element, card.progressLine);
+
+const DEMO_TRACK: NowPlayingTrack = {
+  title: 'Название трека',
+  artist: 'Исполнитель',
+  coverUrl: null,
+  progressMs: 0,
+  durationMs: 214_000,
+  isPlaying: true,
+  source: 'manual',
+  receivedAt: 0,
+};
+
+// Строки нарочно русские: кириллица — обязательное требование, и проверять
+// её надо на том же кадре, где всё остальное.
+const DEMO_LINES = [
+  'Здесь идёт строка песни',
+  'И вторая строка следом',
+  'А тут припев во весь экран',
+  'Слова ложатся на биты',
+];
+syncEngine.setLyrics({
+  synced: true,
+  hasWordTiming: true,
+  lines: DEMO_LINES.map((text, index) => ({
+    timeMs: index * 4000,
+    text,
+    words: text.split(' ').map((word, wordIndex, all) => ({
+      timeMs: index * 4000 + (wordIndex / all.length) * 3600,
+      text: word,
+    })),
+  })),
+});
 
 const compositor = new Compositor(canvas);
 compositor.resize(window.innerWidth, window.innerHeight, 1);
@@ -324,6 +374,14 @@ function frame(): void {
       url: '', image: null, colors: [],
     });
     frameMsTotal += stats.frameMs;
+
+    // Карточка и текст живут на тех же виртуальных часах, что и рендер.
+    const position = timestamp % DEMO_TRACK.durationMs;
+    card.update({ ...DEMO_TRACK, progressMs: position }, settings, timestamp);
+    lyricsOverlay.update(
+      syncEngine.locate(position % (DEMO_LINES.length * 4000)),
+      settings, stats.palette, synthesize(timestamp, stage.section), stats.meanLuminance,
+    );
     if (stats.postActive) report.warpFrames++;
     report.particleTypes = stats.transient.particleTypes;
     for (const id of stats.activePrimitives) renderedInStage.add(id);

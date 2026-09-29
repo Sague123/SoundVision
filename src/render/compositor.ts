@@ -90,6 +90,8 @@ export class Compositor {
   private lowFpsStreak = 0;
   /** Адаптивный порог bloom и средняя яркость кадра, см. measureLuminance. */
   private bloomThreshold = 0.5;
+  /** Доля кадра за примитивом, которому нужен прямой горизонт. */
+  private stableFrame = 0;
   private meanLuminance = 0.2;
   private frameCounter = 0;
   private readonly lumaCanvas = document.createElement('canvas');
@@ -155,12 +157,16 @@ export class Compositor {
     const harmony = this.activeHarmony(settings);
 
     // Сцена идёт первой: от неё зависят и палитра, и набор примитивов, и камера.
-    const scene = this.scene.update(mood, sceneConfig(settings));
+    const scene = this.scene.update(mood, sceneConfig(settings, this.stableFrame));
     const palette = this.buildPalette(mood, settings, cover, harmony);
     this.lastPalette = palette;
 
     this.applyQuality(mood.timeMs, settings);
     const state = this.generator.update(mood, settings, scene);
+    // На следующий кадр: сцена считается раньше генератора, поэтому доля
+    // «стабильного» примитива приезжает с опозданием на кадр. Для плавно
+    // едущего веса это незаметно, а порядок вычислений остаётся простым.
+    this.stableFrame = state.stableFrame;
 
     const frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight' | 'tuning' | 'fade'> = {
       width: this.width,
@@ -177,7 +183,11 @@ export class Compositor {
       ? this.genre.render(frame, state, clamp01(settings.memory.trails))
       : [];
 
-    this.transient.update(mood, settings, scene, settings.particles);
+    // Частицы привязаны к соло: набор типов приходит от генератора.
+    this.transient.update(mood, settings, scene, {
+      ...settings.particles,
+      preferred: settings.particles.mode === 'auto' ? state.particles : undefined,
+    });
     const transientDebug = settings.layers.transient.enabled
       ? this.transient.render(palette, scene, clamp01(settings.layers.transient.weight))
       : { particles: 0, rings: 0, flash: 0, particleTypes: [] };
@@ -472,7 +482,12 @@ function coverScale(width: number, height: number, roll: number): number {
 }
 
 /** Разрешения для сцены собираются из настроек здесь: сцена в Settings не лезет. */
-function sceneConfig(settings: Settings): SceneConfig {
+/**
+ * @param stableFrame — доля кадра за примитивом, которому нужен прямой
+ *   горизонт. На неё приглушаются деформации: перспективная сетка, согнутая
+ *   domain warp'ом, перестаёт читаться как пол.
+ */
+function sceneConfig(settings: Settings, stableFrame: number): SceneConfig {
   const t = settings.transients;
   return {
     intensity: clamp01(t.intensity),
@@ -489,6 +504,7 @@ function sceneConfig(settings: Settings): SceneConfig {
     // Деформации тоже участвуют в укачивании, поэтому мастер движения их гасит.
     deformation: settings.deformation.enabled
       ? clamp01(settings.deformation.amount) * clamp01(settings.motion.amount)
+        * (1 - clamp01(stableFrame) * 0.92)
       : 0,
     deformations: {
       domainWarp: clamp01(settings.deformation.domainWarp),

@@ -8,6 +8,7 @@ import type { Tuning } from './tuning.ts';
 
 export const ALL_PRIMITIVE_IDS = [
   // Аудио-примитивы: рисуют сам сигнал, а не абстракцию рядом с ним.
+  'wave-grid-3d',
   'waveform-terrain',
   'wave-mesh',
   'spectrum',
@@ -26,6 +27,7 @@ export const ALL_PRIMITIVE_IDS = [
 export type PrimitiveId = (typeof ALL_PRIMITIVE_IDS)[number];
 
 export const PRIMITIVE_LABELS: Record<PrimitiveId, string> = {
+  'wave-grid-3d': 'Волна над сеткой (3D)',
   'waveform-terrain': 'Waveform terrain',
   'wave-mesh': 'Wave mesh',
   spectrum: 'Spectrum + glitch',

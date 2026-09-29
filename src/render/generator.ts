@@ -10,8 +10,10 @@ import type { MoodVector, Section } from '../audio/mood-vector.ts';
 import { clamp, clamp01 } from '../audio/features.ts';
 import type { SceneState } from './scene.ts';
 import type { PrimitiveRole, Settings } from '../settings.ts';
+import type { ParticleType } from './particles.ts';
 import { makeSeed, mulberry32, type GeneratorSeed } from './seed.ts';
 import { CellularPrimitive } from './primitives/cellular.ts';
+import { WaveGrid3DPrimitive } from './primitives/wave-grid-3d.ts';
 import { OscilloscopePrimitive } from './primitives/oscilloscope.ts';
 import { RadialWaveformPrimitive } from './primitives/radial-waveform.ts';
 import { SpectrumPrimitive } from './primitives/spectrum.ts';
@@ -45,6 +47,7 @@ const BASE_LAYER_IDS: PrimitiveId[] = ['flow-field', 'metaballs', 'voronoi'];
 export type PrimitiveClass = 'line' | 'bar' | 'point' | 'volume' | 'modifier';
 
 const PRIMITIVE_CLASS: Record<PrimitiveId, PrimitiveClass> = {
+  'wave-grid-3d': 'line',
   'waveform-terrain': 'line',
   'wave-mesh': 'line',
   'radial-waveform': 'line',
@@ -73,6 +76,42 @@ export function isCompatible(solo: PrimitiveId, accent: PrimitiveId): boolean {
   return soloClass !== accentClass;
 }
 
+/**
+ * Примитивы, которым нужен прямой горизонт.
+ *
+ * Композиция с настоящей перспективой держится на том, что сетка сходится в
+ * одну точку, а горизонт — прямая линия. Глобальные деформации вещества гнут
+ * кадр целиком, и у такого примитива вместо пола получается волнистая тряпка:
+ * трёхмерность пропадает мгновенно. Поэтому пока такой примитив ведёт кадр,
+ * деформации приглушаются пропорционально его весу.
+ */
+const STABLE_FRAME_IDS: PrimitiveId[] = ['wave-grid-3d'];
+
+/**
+ * Какие частицы подходят каждому соло.
+ *
+ * Частицы — не самостоятельный слой, а продолжение соло: над перспективной
+ * сеткой летит пыль и искры с гребня волны, над спектром — искры от
+ * столбцов, над калейдоскопом уместны осколки. Выбор «по настроению» без
+ * оглядки на соло ставил треугольники поверх трёхмерного пола и ломал всю
+ * глубину.
+ */
+const SOLO_PARTICLES: Record<PrimitiveId, readonly ParticleType[]> = {
+  'wave-grid-3d': ['dust', 'sparks'],
+  'waveform-terrain': ['dust', 'sparks', 'streaks'],
+  'wave-mesh': ['dust', 'ribbons'],
+  spectrum: ['sparks', 'streaks'],
+  'radial-waveform': ['sparks', 'bokeh'],
+  oscilloscope: ['sparks', 'dust'],
+  'flow-field': ['dust', 'ribbons', 'swarm'],
+  metaballs: ['bokeh', 'dust', 'embers'],
+  voronoi: ['shards', 'sparks'],
+  kaleidoscope: ['shards', 'petals', 'bokeh'],
+  cellular: ['sparks', 'dust'],
+  'l-system': ['petals', 'embers', 'dust'],
+  raymarch: ['embers', 'bokeh', 'sparks'],
+};
+
 /** Роли и их доли визуального веса. */
 export const ROLE_WEIGHT = { solo: 1, accent: 0.26, background: 0.1 } as const;
 
@@ -89,6 +128,7 @@ const SOLO_MIN_MS = 22_000;
  * из чего сейчас сделан мир.
  */
 const SUBSTANCE_POSITION: Record<PrimitiveId, number> = {
+  'wave-grid-3d': 0.15,
   'waveform-terrain': 0.2,
   'wave-mesh': 0.3,
   'radial-waveform': 0.45,
@@ -134,10 +174,18 @@ export interface GeneratorState {
   /** Примитив, который сейчас ведёт базовый слой. */
   baseId: PrimitiveId;
   baseWeight: number;
+  /**
+   * Насколько кадром сейчас владеет примитив, которому нужен прямой горизонт,
+   * 0..1. Композитор на столько же приглушает деформации.
+   */
+  stableFrame: number;
+  /** Типы частиц, подходящие текущему соло. */
+  particles: readonly ParticleType[];
 }
 
 export function createPrimitive(id: PrimitiveId): Primitive {
   switch (id) {
+    case 'wave-grid-3d': return new WaveGrid3DPrimitive();
     case 'waveform-terrain': return new WaveformTerrainPrimitive();
     case 'wave-mesh': return new WaveMeshPrimitive();
     case 'spectrum': return new SpectrumPrimitive();
@@ -262,6 +310,10 @@ export class Generator {
       kaleidoscopeWeight: this.kaleidoscope,
       baseId: this.baseId,
       baseWeight: this.baseWeight,
+      stableFrame: STABLE_FRAME_IDS.reduce(
+        (sum, id) => Math.min(1, sum + (this.weights.get(id) ?? 0)), 0,
+      ),
+      particles: SOLO_PARTICLES[this.leadingPrimitive(settings)] ?? [],
     };
   }
 
@@ -377,6 +429,25 @@ export class Generator {
       && pinnedBackground !== this.solo && pinnedBackground !== this.accent
       ? pinnedBackground
       : null;
+  }
+
+  /**
+   * Кто сейчас ведёт кадр: соло-режим панели, иначе самый тяжёлый по весу.
+   * Берём по весу, а не `this.solo`: в ручном режиме фокус не работает, а
+   * частицам всё равно нужно, к чему привязаться.
+   */
+  private leadingPrimitive(settings: Settings): PrimitiveId {
+    if (settings.generator.solo) return settings.generator.solo;
+    let best: PrimitiveId = this.solo;
+    let bestWeight = -1;
+    for (const [id, weight] of this.weights) {
+      if (id === 'kaleidoscope') continue;
+      if (weight > bestWeight) {
+        bestWeight = weight;
+        best = id;
+      }
+    }
+    return best;
   }
 
   /** Разрешённые параметры на кадр: словарь строится один раз за кадр. */

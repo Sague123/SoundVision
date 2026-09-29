@@ -226,6 +226,15 @@ export interface Settings {
     /** Слушать локальный мост расширения YouTube Music. */
     bridge: boolean;
     bridgeUrl: string;
+    /**
+     * Трек, введённый руками. Нужен, когда играет что угодно помимо Spotify
+     * и YouTube Music: без имени трека нет ни обложки, ни текста песни, а
+     * захват системного звука имени не даёт.
+     */
+    manualArtist: string;
+    manualTitle: string;
+    /** Длительность в секундах; 0 — неизвестна, полоса прогресса тогда скрыта. */
+    manualDurationSec: number;
   };
   cover: {
     /** Использовать обложку как источник цвета. */
@@ -392,6 +401,9 @@ export function defaultSettings(): Settings {
       spotify: false,
       bridge: false,
       bridgeUrl: 'ws://127.0.0.1:8787',
+      manualArtist: '',
+      manualTitle: '',
+      manualDurationSec: 0,
     },
     cover: {
       useForPalette: true,

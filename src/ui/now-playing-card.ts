@@ -15,6 +15,7 @@ import type { Settings } from '../settings.ts';
 const SOURCE_LABELS: Record<NowPlayingTrack['source'], string> = {
   spotify: 'Spotify',
   'youtube-music': 'YouTube Music',
+  manual: 'Вручную',
 };
 
 export class NowPlayingCard {

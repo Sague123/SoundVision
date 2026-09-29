@@ -77,6 +77,13 @@ export interface ParticleConfig {
   manual: ParticleType[];
   /** Общий множитель плотности, 0..1. */
   density: number;
+  /**
+   * Типы, подходящие текущему соло. По иерархии ролей частицы привязаны к
+   * соло, а не выбираются сами по себе: осколки-треугольники над
+   * перспективной сеткой ломают трёхмерность, а над калейдоскопом — к месту.
+   * Пусто — ограничения нет, выбирает настроение.
+   */
+  preferred?: readonly ParticleType[];
   /** Множитель времени жизни частицы. */
   life: number;
   /** Множитель скорости в общем поле потока. */
@@ -185,7 +192,12 @@ export class ParticleSystem {
     }
 
     const major = mood.key.mode === 'major' ? 1 : 0;
-    const scored = PARTICLE_TYPES.map((type) => ({
+    // Если соло задаёт подходящие типы, выбираем только среди них: настроение
+    // решает, какой именно, но не может вытащить чужой соло тип.
+    const allowed = config.preferred && config.preferred.length > 0
+      ? config.preferred
+      : PARTICLE_TYPES;
+    const scored = allowed.map((type) => ({
       type,
       score: clamp01(this.affinity(type, mood, scene, major) + (this.bias.get(type) ?? 0)
         + ((this.weights.get(type) ?? 0) > 0.15 ? 0.07 : 0)),
@@ -196,9 +208,12 @@ export class ParticleSystem {
     // импульсе, поэтому не считается вторым «активным» типом в кадре.
     const burst = scored.find((entry) => BURST_TYPES.has(entry.type));
     if (burst) winners.add(burst.type);
-    for (const entry of scored) {
-      const target = winners.has(entry.type) ? Math.max(0.25, entry.score) : 0;
-      this.weights.set(entry.type, lerp(this.weights.get(entry.type) ?? 0, target, k));
+    // Проходим по всем типам, а не только по разрешённым: выпавшие из
+    // разрешённых должны плавно погаснуть, а не застыть на прежнем весе.
+    const scoreOf = new Map(scored.map((entry) => [entry.type, entry.score]));
+    for (const type of PARTICLE_TYPES) {
+      const target = winners.has(type) ? Math.max(0.25, scoreOf.get(type) ?? 0) : 0;
+      this.weights.set(type, lerp(this.weights.get(type) ?? 0, target, k));
     }
   }
 

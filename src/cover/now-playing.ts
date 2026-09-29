@@ -3,7 +3,16 @@
  * пришли данные из Spotify или из расширения YouTube Music.
  */
 
-export type NowPlayingSource = 'spotify' | 'youtube-music';
+/**
+ * Откуда узнали, что играет.
+ *
+ * `manual` — руками из панели. Он здесь не для полноты, а потому что без
+ * него приложение в типичном запуске не знает о треке вообще ничего: захват
+ * системного звука даёт звук, но не даёт имени, а Spotify и мост по умолчанию
+ * выключены. Без имени нет ни обложки, ни карточки, ни текста песни — искать
+ * в lrclib нечего.
+ */
+export type NowPlayingSource = 'spotify' | 'youtube-music' | 'manual';
 
 export interface NowPlayingTrack {
   title: string;

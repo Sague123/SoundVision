@@ -728,6 +728,37 @@ export class SettingsPanel {
       note('Если текст песни внизу, карточка сама уходит наверх.'),
     ]);
 
+    this.addSection('Что сейчас играет', () => [
+      note('Захват экрана даёт звук, но не даёт имени трека. Без имени нет ни '
+        + 'обложки, ни текста песни. Если играет не Spotify и не YouTube Music — '
+        + 'впишите трек сюда, и всё остальное подтянется.'),
+      this.track(textField({
+        label: 'Исполнитель', placeholder: 'Например: Земфира',
+        get: () => s.sources.manualArtist,
+        set: (v) => { s.sources.manualArtist = v; },
+      })),
+      this.track(textField({
+        label: 'Название', placeholder: 'Например: Искала',
+        get: () => s.sources.manualTitle,
+        set: (v) => { s.sources.manualTitle = v; },
+      })),
+      this.track(slider({
+        label: 'Длительность', min: 0, max: 600, step: 5,
+        get: () => s.sources.manualDurationSec,
+        set: (v) => { s.sources.manualDurationSec = v; },
+        format: (v) => (v > 0 ? `${Math.floor(v / 60)}:${String(v % 60).padStart(2, '0')}` : 'неизвестна'),
+        def: d.sources.manualDurationSec,
+        hint: 'Нужна для полосы прогресса и синхронизации текста',
+      })),
+      button('Очистить', () => {
+        s.sources.manualArtist = '';
+        s.sources.manualTitle = '';
+        s.sources.manualDurationSec = 0;
+        this.refresh();
+        this.changed();
+      }, 'panel__button--ghost'),
+    ]);
+
     this.addSection('Источники', () => [
       this.track(toggle({
         label: 'Spotify', get: () => s.sources.spotify, set: (v) => { s.sources.spotify = v; },
