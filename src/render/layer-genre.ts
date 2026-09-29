@@ -91,7 +91,22 @@ export class GenreLayer {
     // ничего не менял.
     const trailAmount = clamp01(state.genreParams.trail * (trails / 0.35));
     const fadeRate = 0.8 + (1 - trailAmount) * 28;
-    const fade = clamp01(1 - Math.exp(-(frame.dtMs / 1000) * fadeRate));
+    let fade = clamp01(1 - Math.exp(-(frame.dtMs / 1000) * fadeRate));
+    /*
+     * Примитив может ограничить следы, пока он на экране. Даже при нулевых
+     * «следах» слой гасит прошлый кадр лишь на треть за кадр, и быстро
+     * расходящееся кольцо тянет за собой шлейф из нескольких копий — вместо
+     * колец выходят полосы. Поэтому предел задаёт саму долю стирания. Он
+     * входит по весу, чтобы смена сцены не щёлкала следами, но уже к трети
+     * веса — в полную силу: в тихих состояниях главный слой идёт на
+     * половине веса.
+     */
+    for (const [id, primitive] of this.drawables) {
+      if (primitive.maxTrail === undefined) continue;
+      const w = clamp01((state.weights.get(id) ?? 0) * 3);
+      if (w <= 0) continue;
+      fade = Math.max(fade, w * (1 - clamp01(primitive.maxTrail)));
+    }
     ctx.globalCompositeOperation = 'destination-out';
     ctx.globalAlpha = 1;
     ctx.fillStyle = `rgba(0,0,0,${fade.toFixed(4)})`;

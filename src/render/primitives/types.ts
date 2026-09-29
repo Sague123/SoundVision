@@ -14,6 +14,7 @@ export const ALL_PRIMITIVE_IDS = [
   'wave-mesh',
   'spectrum',
   'radial-waveform',
+  'ripple-rings',
   'oscilloscope',
   // Генеративные.
   'flow-field',
@@ -34,6 +35,7 @@ export const PRIMITIVE_LABELS: Record<PrimitiveId, string> = {
   'wave-mesh': 'Wave mesh',
   spectrum: 'Spectrum + glitch',
   'radial-waveform': 'Radial waveform',
+  'ripple-rings': 'Кольца-волны вокруг обложки',
   oscilloscope: 'Oscilloscope / Lissajous',
   'flow-field': 'Flow field',
   metaballs: 'Metaballs',
@@ -111,6 +113,13 @@ interface PrimitiveBase {
 
 export interface DrawPrimitive extends PrimitiveBase {
   readonly kind: 'draw';
+  /**
+   * Сколько прошлого кадра жанровому слою можно оставить, пока примитив на
+   * экране, 0..1: 0 — слой каждый кадр стирается целиком. Быстро движущимся
+   * тонким линиям следы вредят: расходящееся кольцо оставляет шлейф, и
+   * вместо колец выходят сплошные полосы. Нет поля — не ограничивает.
+   */
+  readonly maxTrail?: number;
   draw(frame: RenderFrame): void;
 }
 

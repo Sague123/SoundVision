@@ -440,6 +440,13 @@ if (params.get('song') === '1') {
   settings.generator.mode = 'auto';
   settings.director.mode = 'auto';
   settings.director.hud = true;
+  // `&scene=ripple-halo` — держать одну сцену (полуавтомат), чтобы разглядеть её
+  // в разных частях песни.
+  const lockedScene = params.get('scene');
+  if (lockedScene) {
+    settings.director.mode = 'semi';
+    settings.director.lockedScene = lockedScene;
+  }
   const hud = new DirectorHud(() => {}, () => {});
   hud.setVisible(true);
   // Обложка в центре проверяется с картинкой: `?cover=0` — путь с монограммой.
@@ -476,7 +483,7 @@ if (params.get('song') === '1') {
         last ? `${last.reason || '—'}${last.transition ? ` · ${last.transition}` : ''}` : '',
         runtime.model.profile, runtime.model.observationCount);
     } catch (err) {
-      report.errors.push((err as Error).message);
+      report.errors.push((err as Error).stack ?? (err as Error).message);
     }
     report.frames++;
     report.song = {

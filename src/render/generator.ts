@@ -15,6 +15,7 @@ import { makeSeed, mulberry32, type GeneratorSeed } from './seed.ts';
 import { CellularPrimitive } from './primitives/cellular.ts';
 import { WaveGrid3DPrimitive } from './primitives/wave-grid-3d.ts';
 import { WaveformRibbonPrimitive } from './primitives/waveform-ribbon.ts';
+import { RippleRingsPrimitive } from './primitives/ripple-rings.ts';
 import { OscilloscopePrimitive } from './primitives/oscilloscope.ts';
 import { RadialWaveformPrimitive } from './primitives/radial-waveform.ts';
 import { SpectrumPrimitive } from './primitives/spectrum.ts';
@@ -53,6 +54,7 @@ const PRIMITIVE_CLASS: Record<PrimitiveId, PrimitiveClass> = {
   'waveform-terrain': 'line',
   'wave-mesh': 'line',
   'radial-waveform': 'line',
+  'ripple-rings': 'line',
   oscilloscope: 'line',
   spectrum: 'bar',
   'flow-field': 'line',
@@ -107,6 +109,7 @@ const SOLO_PARTICLES: Record<PrimitiveId, readonly ParticleType[]> = {
   'wave-mesh': ['dust', 'ribbons'],
   spectrum: ['sparks', 'streaks'],
   'radial-waveform': ['sparks', 'bokeh'],
+  'ripple-rings': ['dust', 'sparks'],
   oscilloscope: ['sparks', 'dust'],
   'flow-field': ['dust', 'ribbons', 'swarm'],
   metaballs: ['bokeh', 'dust', 'embers'],
@@ -138,6 +141,7 @@ const SUBSTANCE_POSITION: Record<PrimitiveId, number> = {
   'waveform-terrain': 0.2,
   'wave-mesh': 0.3,
   'radial-waveform': 0.45,
+  'ripple-rings': 0.42,
   oscilloscope: 0.6,
   spectrum: 0.85,
   'flow-field': 0.05,
@@ -193,6 +197,7 @@ export function createPrimitive(id: PrimitiveId): Primitive {
   switch (id) {
     case 'wave-grid-3d': return new WaveGrid3DPrimitive();
     case 'waveform-ribbon': return new WaveformRibbonPrimitive();
+    case 'ripple-rings': return new RippleRingsPrimitive();
     case 'waveform-terrain': return new WaveformTerrainPrimitive();
     case 'wave-mesh': return new WaveMeshPrimitive();
     case 'spectrum': return new SpectrumPrimitive();

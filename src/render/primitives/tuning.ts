@@ -106,6 +106,14 @@ export const PRIMITIVE_PARAMS: Record<PrimitiveId, readonly ParamSpec[]> = {
     share('eq', 'Радиальный эквалайзер', 0.7, 'Столбцы спектра лучами вокруг кольца; 0 — выключить'),
     lineWidth,
   ],
+  'ripple-rings': [
+    gain('rate', 'Частота колец', 'Сколько колец рождается в секунду, кроме ударных'),
+    gain('speed', 'Скорость расхождения'),
+    gain('amplitude', 'Волнистость'),
+    gain('spin', 'Вращение узора'),
+    share('halo', 'Обод вокруг обложки', 0.8),
+    lineWidth,
+  ],
   oscilloscope: [
     share('persistence', 'Послесвечение', 0.6, 'Фосфорный след: 1 — почти не гаснет'),
     gain('gain', 'Усиление'),

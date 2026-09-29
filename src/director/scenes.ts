@@ -165,6 +165,31 @@ export const SCENES: SceneDef[] = [
     },
   },
   {
+    id: 'ripple-halo',
+    name: 'Ripple Halo',
+    layers: [
+      // Кольца-волны расходятся из-под обложки; больше в кадре ничего нет —
+      // как на референсе: тёмное поле, обложка и её «эхо».
+      { primitive: 'ripple-rings', role: 'primary', weight: 1 },
+    ],
+    particles: ['dust'],
+    particleDensity: 0.12,
+    lighting: { bloom: 0.55, rays: 0.1, rim: 0.05 },
+    camera: 'static',
+    // Память кадра размазала бы кольца в полосы — как и следы слоя.
+    feedback: 0,
+    typography: 0.9,
+    centerpiece: 1,
+    complexity: 0.3,
+    fits: { VOCAL_FOCUS: 0.8, AMBIENT: 0.8, BREAKDOWN: 0.75, RHYTHMIC: 0.6, IDLE: 0.5, BUILD: 0.45 },
+    affinity: { rhythmicDensity: 0.3, lowMid: 0.2, vocalLikelihood: 0.3 },
+    traits: ['typography', 'minimal'],
+    bindings: {
+      ...COMMON_BINDINGS,
+      primaryPulse: { source: 'bass', curve: 'ease-out', multiplier: 0.3, offset: 0.8, attack: 0.02, release: 0.35 },
+    },
+  },
+  {
     id: 'organic-fluid',
     name: 'Organic Fluid',
     layers: [
@@ -299,6 +324,7 @@ export function findScene(id: string): SceneDef {
 export const PRIMITIVE_COMPLEXITY: Record<PrimitiveId, number> = {
   'wave-grid-3d': 0.4,
   'waveform-ribbon': 0.25,
+  'ripple-rings': 0.3,
   'waveform-terrain': 0.45,
   'wave-mesh': 0.35,
   spectrum: 0.45,

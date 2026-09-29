@@ -310,7 +310,8 @@ export const MAX_SAFE_FLASH_HZ = 3;
 
 /** Примитивы, которые рисуют сам сигнал, а не абстракцию рядом с ним. */
 export const AUDIO_PRIMITIVE_IDS: PrimitiveId[] = [
-  'waveform-ribbon', 'waveform-terrain', 'wave-mesh', 'spectrum', 'radial-waveform', 'oscilloscope',
+  'waveform-ribbon', 'waveform-terrain', 'wave-mesh', 'spectrum', 'radial-waveform', 'ripple-rings',
+  'oscilloscope',
 ];
 
 function defaultPrimitives(): Record<PrimitiveId, PrimitiveSettings> {

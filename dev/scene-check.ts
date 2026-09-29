@@ -194,7 +194,7 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
   // Порядок примитивов по оси вещества: от тумана к плазме.
   const SUBSTANCE_ORDER = [
     'flow-field', 'wave-grid-3d', 'waveform-terrain', 'l-system', 'wave-mesh', 'metaballs',
-    'waveform-ribbon', 'radial-waveform', 'oscilloscope', 'voronoi', 'cellular', 'kaleidoscope',
+    'waveform-ribbon', 'ripple-rings', 'radial-waveform', 'oscilloscope', 'voronoi', 'cellular', 'kaleidoscope',
     'spectrum', 'raymarch',
   ];
 
