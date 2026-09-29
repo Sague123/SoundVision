@@ -505,7 +505,7 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.light.rays = 0.5;
       // Сетка мелкая и частая, глитч на полную, радуга по частоте — здесь
       // она к месту, потому что читается как легенда спектра.
-      s.primitives.spectrum.params.bars = 256;
+      s.primitives.spectrum.params.bars = 192;
       s.primitives.spectrum.params.glitch = 1;
       s.primitives.spectrum.params.gap = 0.55;
       s.primitives['wave-mesh'].params.lines = 140;

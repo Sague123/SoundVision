@@ -169,7 +169,11 @@ export class SongSimulator {
         const syllable = 0.25 + 0.75 * Math.max(0, Math.sin(t * Math.PI * 2 * 4.7));
         m += vocal * peak * 1.6 * syllable;
       }
-      this.spectrum[b] = energy * m * 0.13;
+      // Живой спектр не бывает гладким: у каждого бина свой дрожащий уровень.
+      // Смена шума раз в 40 мс — столько держится кадр анализатора.
+      const frameIndex = Math.floor(t * 25);
+      const jitter = ((Math.sin(b * 91.7 + frameIndex * 17.3) * 43758.5453) % 1 + 1) % 1;
+      this.spectrum[b] = energy * m * 0.13 * (0.7 + jitter * 0.6);
     }
   }
 }

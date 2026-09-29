@@ -69,9 +69,15 @@ export class LyricsOverlay {
     meanLuminance: number,
     emphasis = 1,
   ): void {
+    /*
+     * По ТЗ режиссёра на дропе текст уходит почти в ноль, но зритель прямо
+     * пожаловался, что текста песни не видно, — это важнее таблицы акцентов.
+     * Поэтому режиссёр двигает в основном размер, а прозрачность не опускает
+     * ниже 0.85: на дропе текст отступает, но читается.
+     */
     const e = Math.max(0, Math.min(1, emphasis));
-    this.element.style.setProperty('--lyrics-emphasis-scale', (0.86 + e * 0.24).toFixed(3));
-    this.element.style.setProperty('--lyrics-emphasis-opacity', (0.6 + e * 0.4).toFixed(3));
+    this.element.style.setProperty('--lyrics-emphasis-scale', (0.9 + e * 0.2).toFixed(3));
+    this.element.style.setProperty('--lyrics-emphasis-opacity', (0.85 + e * 0.15).toFixed(3));
     const visible = settings.lyrics.enabled && position.line !== null;
     this.element.classList.toggle('lyrics--hidden', !visible);
     this.element.classList.toggle('lyrics--center', settings.lyrics.position === 'center');

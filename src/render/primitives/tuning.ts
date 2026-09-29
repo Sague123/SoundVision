@@ -81,7 +81,7 @@ export const PRIMITIVE_PARAMS: Record<PrimitiveId, readonly ParamSpec[]> = {
     lineWidth,
   ],
   spectrum: [
-    { key: 'bars', label: 'Число столбцов', min: 64, max: 256, step: 8, def: 192, format: 'plain',
+    { key: 'bars', label: 'Число столбцов', min: 32, max: 256, step: 8, def: 112, format: 'plain',
       wide: [8, 512] },
     share('gap', 'Зазор между столбцами', 0.4),
     gain('barHeight', 'Высота столбцов'),

@@ -37,6 +37,9 @@ export interface CompositorStats {
   harmonyName: string;
   /** Текущий адаптивный порог свечения. */
   bloomThreshold: number;
+  /** Множитель автоэкспозиции и яркость верхних 2% кадра, по которой он подобран. */
+  autoExposure: number;
+  exposureProbe: number;
   /** Средняя яркость кадра: по ней текст подбирает контрастный цвет. */
   meanLuminance: number;
 }
@@ -54,6 +57,13 @@ const UPGRADE_STREAK = 6;
 const LUMA_WIDTH = 16;
 const LUMA_HEIGHT = 9;
 const LUMA_INTERVAL_FRAMES = 6;
+/** К какой яркости автоэкспозиция тянет самые светлые места кадра. */
+const AUTO_EXPOSURE_PEAK = 0.62;
+/** Сильнее не поднимаем: иначе тишина раздувается в серый шум. */
+const AUTO_EXPOSURE_MAX = 2.6;
+/** Зонд экспозиции: достаточно мелкий, чтобы тонкие линии не растворялись. */
+const EXPOSURE_WIDTH = 128;
+const EXPOSURE_HEIGHT = 72;
 
 export class Compositor {
   private readonly ctx: CanvasRenderingContext2D;
@@ -92,6 +102,17 @@ export class Compositor {
   private lowFpsStreak = 0;
   /** Адаптивный порог bloom и средняя яркость кадра, см. measureLuminance. */
   private bloomThreshold = 0.5;
+  /** Множитель автоэкспозиции, 1..AUTO_EXPOSURE_MAX. */
+  private autoExposure = 1;
+  /** Яркость верхних 2% по зонду экспозиции — для отладки и калибровки. */
+  private exposureProbe = 0;
+  private readonly lumaHistogram = new Uint16Array(64);
+  private readonly exposureCanvas = document.createElement('canvas');
+  private readonly exposureCtx = (() => {
+    this.exposureCanvas.width = EXPOSURE_WIDTH;
+    this.exposureCanvas.height = EXPOSURE_HEIGHT;
+    return this.exposureCanvas.getContext('2d', { willReadFrequently: true });
+  })();
   /** Доля кадра за примитивом, которому нужен прямой горизонт. */
   private stableFrame = 0;
   /** Настройки с наложенными решениями режиссёра — один объект на всё время. */
@@ -230,6 +251,8 @@ export class Compositor {
       harmonyName: harmony.name,
       bloomThreshold: this.bloomThreshold,
       meanLuminance: this.meanLuminance,
+      autoExposure: this.autoExposure,
+      exposureProbe: this.exposureProbe,
     };
   }
 
@@ -374,13 +397,14 @@ export class Compositor {
     // ветка в шейдере.
     const lightState = {
       ...scene.light,
-      exposure: settings.light.exposure ? scene.light.exposure : 1,
+      exposure: (settings.light.exposure ? scene.light.exposure : 1) * this.autoExposure,
       vignette: settings.light.vignette ? scene.light.vignette : 0,
       flare: settings.light.flare ? scene.light.flare : 0,
     };
 
+    // Поднятая экспозиция делается в шейдере — значит, проход не простаивает.
     const idle = PostPass.isIdle(scene.deformation, scene.impact, scene.memory, light)
-      && Math.abs(fovLens) < 0.004;
+      && Math.abs(fovLens) < 0.004 && this.autoExposure < 1.02;
     const output = idle || !this.postAllowed || !this.post.available
       ? null
       : this.post.render(
@@ -397,6 +421,54 @@ export class Compositor {
    * Считается по крошечной копии и не каждый кадр: getImageData синхронизирует
    * конвейер, а порог по своей природе медленный и в частых замерах не нуждается.
    */
+  /**
+   * Автоэкспозиция: тёмный кадр поднимается до читаемой яркости.
+   *
+   * На спокойных участках примитивы гасят линии по энергии, а режиссёр ещё
+   * и ослабляет слои — тишина засчитывалась дважды, и «спокойнее» на
+   * снимках превращалось в «пусто»: интро и спад давали 1% заполненности.
+   * Здесь, как у камеры, по самым ярким 3% кадра подбирается множитель:
+   * если светлые места тусклые, кадр поднимается. Громкие места не
+   * трогаются — множитель не бывает меньше единицы, — а подъём ограничен,
+   * чтобы тишина не раздувалась в серый шум.
+   */
+  private updateAutoExposure(): void {
+    /*
+     * Отдельный, более мелкий зонд. Зонд средней яркости — 16×9, и тонкая
+     * линия в кадре 1920 пикселей там усредняется в ячейку в 120 пикселей и
+     * теряет почти всю яркость: верхние проценты такого зонда тусклы всегда,
+     * и экспозиция уходила бы в потолок даже на дропе.
+     */
+    const ctx = this.exposureCtx;
+    if (!ctx) return;
+    ctx.drawImage(this.composed, 0, 0, EXPOSURE_WIDTH, EXPOSURE_HEIGHT);
+    const histogram = this.lumaHistogram;
+    histogram.fill(0);
+    try {
+      const data = ctx.getImageData(0, 0, EXPOSURE_WIDTH, EXPOSURE_HEIGHT).data;
+      for (let i = 0; i < data.length; i += 4) {
+        const luma = (data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722) / 255;
+        histogram[Math.min(63, Math.floor(luma * 64))]++;
+      }
+    } catch {
+      return;
+    }
+    const total = EXPOSURE_WIDTH * EXPOSURE_HEIGHT;
+    let seen = 0;
+    let bin = 63;
+    for (; bin >= 0; bin--) {
+      seen += histogram[bin];
+      if (seen >= total * 0.02) break;
+    }
+    const bright = (bin + 0.5) / 64;
+    this.exposureProbe = bright;
+    const target = Math.min(AUTO_EXPOSURE_MAX, Math.max(1, AUTO_EXPOSURE_PEAK / Math.max(0.02, bright)));
+    // Подъём медленный, спуск быстрый: на дропе кадр не должен пересветиться
+    // на те полсекунды, пока экспозиция догоняет.
+    const k = target > this.autoExposure ? 0.08 : 0.35;
+    this.autoExposure += (target - this.autoExposure) * k;
+  }
+
   private measureLuminance(settings: Settings): void {
     if (this.frameCounter++ % LUMA_INTERVAL_FRAMES !== 0) return;
     const ctx = this.lumaCtx;
@@ -404,15 +476,20 @@ export class Compositor {
 
     ctx.drawImage(this.composed, 0, 0, LUMA_WIDTH, LUMA_HEIGHT);
     let sum = 0;
+    const histogram = this.lumaHistogram;
+    histogram.fill(0);
     try {
       const data = ctx.getImageData(0, 0, LUMA_WIDTH, LUMA_HEIGHT).data;
       for (let i = 0; i < data.length; i += 4) {
-        sum += (data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722) / 255;
+        const luma = (data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722) / 255;
+        sum += luma;
+        histogram[Math.min(63, Math.floor(luma * 64))]++;
       }
     } catch {
       return;
     }
     const mean = sum / (LUMA_WIDTH * LUMA_HEIGHT);
+    this.updateAutoExposure();
     this.meanLuminance += (mean - this.meanLuminance) * 0.25;
     // Порог держится выше средней яркости: светится то, что выделяется на фоне
     // кадра, а не весь кадр целиком. Именно это и не даёт выжечь картинку.

@@ -74,6 +74,8 @@ interface SmokeReport {
   }>;
   /** Типы частиц, живые в последнем кадре. */
   particleTypes: string[];
+  /** Автоэкспозиция: множитель и яркость верхних 2%, по которой он подобран. */
+  exposure?: { gain: number; probe: number };
   /** Режим песни: где мы и что решил режиссёр. */
   song?: { sec: number; part: string; state: string; scene: string };
   /** Метрики текущего кадра — их читает внешний прогон в режиме `?only=`. */
@@ -455,6 +457,7 @@ if (params.get('song') === '1') {
       lyricsOverlay.update(syncEngine.locate(position % (DEMO_LINES.length * 4000)),
         settings, stats.palette, mood, stats.meanLuminance, step.output?.typography ?? 1);
       hud.update(step, settings, t);
+      report.exposure = { gain: stats.autoExposure, probe: stats.exposureProbe };
       const decisions = runtime.director.decisions;
       const last = decisions[decisions.length - 1];
       hud.updateDetails(runtime.director.activeEffects(),
