@@ -1,5 +1,6 @@
 import { mulberry32, type GeneratorSeed } from '../seed.ts';
 import type { DrawPrimitive, RenderFrame } from './types.ts';
+import { WaveformGain } from './waveform-gain.ts';
 
 /**
  * Осциллограф с послесвечением.
@@ -26,6 +27,7 @@ export class OscilloscopePrimitive implements DrawPrimitive {
   private width = 1;
   private height = 1;
   private xyMode = true;
+  private readonly autoGain = new WaveformGain();
 
   resize(width: number, height: number): void {
     this.width = width;
@@ -78,8 +80,11 @@ export class OscilloscopePrimitive implements DrawPrimitive {
     const cy = this.height / 2;
     // Фигура должна занимать кадр, а не висеть точкой посередине: минимум
     // держим высоким, а энергия только добавляет сверху.
+    // Автоусиление: форма читается и в тихом интро, а громкость по-прежнему
+    // видна по размеру и яркости через энергию.
+    const auto = this.autoGain.update(left, frame.dtMs / 1000);
     const gain = Math.min(this.width, this.height) * (0.3 + params.scale * 0.26)
-      * (0.85 + mood.energy * 0.5) * tuning.gain;
+      * (0.85 + mood.energy * 0.5) * tuning.gain * auto;
 
     // Режим берётся из настройки, seed решает только когда она на середине.
     const xyMode = tuning.lissajous > 0.5 || (tuning.lissajous > 0.25 && this.xyMode);

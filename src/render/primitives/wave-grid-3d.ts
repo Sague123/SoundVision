@@ -1,5 +1,6 @@
 import { mulberry32, type GeneratorSeed } from '../seed.ts';
 import type { DrawPrimitive, RenderFrame } from './types.ts';
+import { WaveformGain } from './waveform-gain.ts';
 
 /**
  * Осциллограмма в перспективе над уходящей в горизонт сеткой.
@@ -47,6 +48,7 @@ export class WaveGrid3DPrimitive implements DrawPrimitive {
   /** Медленный сдвиг сетки «на зрителя» — из-за него пол течёт. */
   private scroll = 0;
   private rng = mulberry32(1);
+  private readonly autoGain = new WaveformGain();
 
   resize(width: number, height: number): void {
     this.width = width;
@@ -64,7 +66,7 @@ export class WaveGrid3DPrimitive implements DrawPrimitive {
 
   draw(frame: RenderFrame): void {
     const { ctx, mood, params, palette, weight, tuning } = frame;
-    this.sample(mood.waveform);
+    this.sample(mood.waveform, this.autoGain.update(mood.waveform, frame.dtMs / 1000));
 
     // Сетка едет в темпе: на быстрой музыке пол летит быстрее.
     const bpm = Math.max(60, mood.bpm);
@@ -224,7 +226,7 @@ export class WaveGrid3DPrimitive implements DrawPrimitive {
   }
 
   /** Осциллограмма прореживается по максимуму модуля и сглаживается по времени. */
-  private sample(waveform: Float32Array): void {
+  private sample(waveform: Float32Array, gain: number): void {
     const stride = Math.max(1, Math.floor(waveform.length / SAMPLES));
     for (let i = 0; i < SAMPLES; i++) {
       let peak = 0;
@@ -234,7 +236,7 @@ export class WaveGrid3DPrimitive implements DrawPrimitive {
         if (Math.abs(value) > Math.abs(peak)) peak = value;
       }
       // Лёгкое сглаживание: без него волна дрожит покадрово и читается шумом.
-      this.samples[i] = this.samples[i] * 0.35 + peak * 0.65;
+      this.samples[i] = this.samples[i] * 0.35 + peak * gain * 0.65;
     }
   }
 }

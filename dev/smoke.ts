@@ -20,6 +20,9 @@ import { NowPlayingCard } from '../src/ui/now-playing-card.ts';
 import { LyricsOverlay } from '../src/ui/lyrics-overlay.ts';
 import { SyncEngine } from '../src/lyrics/sync-engine.ts';
 import type { NowPlayingTrack } from '../src/cover/now-playing.ts';
+import { DirectorRuntime } from '../src/director/runtime.ts';
+import { DirectorHud } from '../src/ui/director-hud.ts';
+import { SongSimulator } from './song-sim.ts';
 import { ALL_PRIMITIVE_IDS, type PrimitiveId } from '../src/render/primitives/types.ts';
 import { defaultSettings } from '../src/settings.ts';
 import type { Section } from '../src/audio/features.ts';
@@ -71,6 +74,8 @@ interface SmokeReport {
   }>;
   /** Типы частиц, живые в последнем кадре. */
   particleTypes: string[];
+  /** Режим песни: где мы и что решил режиссёр. */
+  song?: { sec: number; part: string; state: string; scene: string };
   /** Метрики текущего кадра — их читает внешний прогон в режиме `?only=`. */
   metrics: FrameMetrics | null;
   /** Снимок холста в нативном разрешении, data URL. */
@@ -417,4 +422,61 @@ function frame(): void {
   requestAnimationFrame(frame);
 }
 
-requestAnimationFrame(frame);
+/*
+ * Режим песни: `?song=1&at=40` — режиссёр целиком на синтетической песне.
+ *
+ * Смоук по стадиям держит один примитив в одной секции и режиссёра не
+ * видит вовсе. Здесь же песня идёт через тот же конвейер, что и живое
+ * приложение, а `at` проматывает её до нужной секунды без отрисовки —
+ * чистым расчётом режиссёра, — чтобы снять нужный момент: интро,
+ * нарастание, дроп, спад, куплет. Панель режиссёра видна.
+ */
+if (params.get('song') === '1') {
+  const sim = new SongSimulator();
+  const runtime = new DirectorRuntime({ persist: false });
+  settings.generator.mode = 'auto';
+  settings.director.mode = 'auto';
+  settings.director.hud = true;
+  const hud = new DirectorHud(() => {}, () => {});
+  hud.setVisible(true);
+  root.append(hud.element, hud.questionElement);
+
+  const at = Math.max(0, Number(params.get('at')) || 0) * 1000;
+  for (let t = 0; t < at; t += VIRTUAL_STEP_MS) runtime.step(sim.mood(t, VIRTUAL_STEP_MS), settings);
+
+  let t = at;
+  const songFrame = (): void => {
+    const mood = sim.mood(t, VIRTUAL_STEP_MS);
+    const step = runtime.step(mood, settings);
+    try {
+      const stats = compositor.render(mood, settings, { url: '', image: null, colors: [] }, step.output);
+      const position = t % DEMO_TRACK.durationMs;
+      card.update({ ...DEMO_TRACK, progressMs: position }, settings, t);
+      lyricsOverlay.update(syncEngine.locate(position % (DEMO_LINES.length * 4000)),
+        settings, stats.palette, mood, stats.meanLuminance, step.output?.typography ?? 1);
+      hud.update(step, settings, t);
+      const decisions = runtime.director.decisions;
+      const last = decisions[decisions.length - 1];
+      hud.updateDetails(runtime.director.activeEffects(),
+        last ? `${last.reason || '—'}${last.transition ? ` · ${last.transition}` : ''}` : '',
+        runtime.model.profile, runtime.model.observationCount);
+    } catch (err) {
+      report.errors.push((err as Error).message);
+    }
+    report.frames++;
+    report.song = {
+      sec: t / 1000,
+      part: sim.partAt(t / 1000).part,
+      state: step.state.state,
+      scene: runtime.director.currentScene.name,
+    };
+    label.textContent = `песня ${(t / 1000).toFixed(1)} с — ${sim.partAt(t / 1000).part}`;
+    if (report.frames % 60 === 0) report.metrics = measure();
+    t += VIRTUAL_STEP_MS;
+    requestAnimationFrame(songFrame);
+  };
+  requestAnimationFrame(songFrame);
+} else {
+  requestAnimationFrame(frame);
+}
+

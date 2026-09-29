@@ -1,5 +1,6 @@
 import { mulberry32, type GeneratorSeed } from '../seed.ts';
 import type { DrawPrimitive, RenderFrame } from './types.ts';
+import { WaveformGain } from './waveform-gain.ts';
 
 /**
  * Ландшафт из истории осциллограммы.
@@ -30,6 +31,7 @@ export class WaveformTerrainPrimitive implements DrawPrimitive {
   private rng = mulberry32(1);
   /** Смещение фазы «дождя»: вертикальных штрихов от гребней. */
   private rainPhase = 0;
+  private readonly autoGain = new WaveformGain();
 
   resize(width: number, height: number): void {
     this.width = width;
@@ -48,7 +50,7 @@ export class WaveformTerrainPrimitive implements DrawPrimitive {
 
   draw(frame: RenderFrame): void {
     const { ctx, mood, params, palette, weight, tuning } = frame;
-    this.push(mood.waveform);
+    this.push(mood.waveform, this.autoGain.update(mood.waveform, frame.dtMs / 1000));
 
     // Глубина задаётся параметром напрямую, плотность лишь поджимает её:
     // «сколько кадров видно» — это решение пользователя, а не настроения.
@@ -165,7 +167,7 @@ export class WaveformTerrainPrimitive implements DrawPrimitive {
   }
 
   /** Осциллограмма прореживается до SAMPLES точек по максимуму модуля. */
-  private push(waveform: Float32Array): void {
+  private push(waveform: Float32Array, gain: number): void {
     const offset = this.writeIndex * SAMPLES;
     const stride = Math.max(1, Math.floor(waveform.length / SAMPLES));
     for (let i = 0; i < SAMPLES; i++) {
@@ -175,7 +177,7 @@ export class WaveformTerrainPrimitive implements DrawPrimitive {
         const value = waveform[start + j] ?? 0;
         if (Math.abs(value) > Math.abs(peak)) peak = value;
       }
-      this.history[offset + i] = peak;
+      this.history[offset + i] = peak * gain;
     }
     this.writeIndex = (this.writeIndex + 1) % MAX_HISTORY;
     this.filled = Math.min(MAX_HISTORY, this.filled + 1);

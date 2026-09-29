@@ -1,5 +1,6 @@
 import { mulberry32, type GeneratorSeed } from '../seed.ts';
 import type { DrawPrimitive, RenderFrame } from './types.ts';
+import { WaveformGain } from './waveform-gain.ts';
 
 /**
  * Осциллограмма, свёрнутая в окружность.
@@ -17,6 +18,7 @@ export class RadialWaveformPrimitive implements DrawPrimitive {
 
   private readonly samples = new Float32Array(SAMPLES);
   private width = 1;
+  private readonly autoGain = new WaveformGain();
   private height = 1;
   private rays = 6;
   private spin = 0;
@@ -38,7 +40,7 @@ export class RadialWaveformPrimitive implements DrawPrimitive {
 
   draw(frame: RenderFrame): void {
     const { ctx, mood, params, palette, weight, tuning } = frame;
-    this.sample(mood.waveform);
+    this.sample(mood.waveform, this.autoGain.update(mood.waveform, frame.dtMs / 1000));
 
     const cx = this.width / 2;
     const cy = this.height / 2;
@@ -88,7 +90,7 @@ export class RadialWaveformPrimitive implements DrawPrimitive {
     ctx.restore();
   }
 
-  private sample(waveform: Float32Array): void {
+  private sample(waveform: Float32Array, gain: number): void {
     const stride = Math.max(1, Math.floor(waveform.length / SAMPLES));
     for (let i = 0; i < SAMPLES; i++) {
       let peak = 0;
@@ -99,7 +101,7 @@ export class RadialWaveformPrimitive implements DrawPrimitive {
       }
       // Сглаживаем по кругу: скачок между последним и первым отсчётом виден
       // как разрыв кольца.
-      this.samples[i] = this.samples[i] * 0.4 + peak * 0.6;
+      this.samples[i] = this.samples[i] * 0.4 + peak * gain * 0.6;
     }
   }
 }
