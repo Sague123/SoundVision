@@ -6,6 +6,7 @@
 import { clamp01 } from '../audio/features.ts';
 import type { CoverArt } from '../cover/cover-art.ts';
 import type { Settings } from '../settings.ts';
+import { Backdrop, type BackdropStyle } from './backdrop.ts';
 import type { Light } from './scene.ts';
 import { createPrimitive } from './generator.ts';
 import type { GeneratorState } from './generator.ts';
@@ -17,6 +18,7 @@ export class BaseLayer {
   readonly canvas = document.createElement('canvas');
   private readonly ctx: CanvasRenderingContext2D;
   private readonly primitives = new Map<PrimitiveId, DrawPrimitive>();
+  private readonly backdrop = new Backdrop();
   private width = 1;
   private height = 1;
 
@@ -42,9 +44,33 @@ export class BaseLayer {
     for (const primitive of this.primitives.values()) primitive.reseed(seed);
   }
 
-  render(frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight' | 'tuning' | 'fade'>, state: GeneratorState, settings: Settings, cover: CoverArt): void {
+  /**
+   * @param backdrop задник: стиль и яркость. Задник закрывает кадр целиком,
+   *   поэтому с ним базовый слой не копит следы — он перерисовывается весь.
+   */
+  render(
+    frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight' | 'tuning' | 'fade'>,
+    state: GeneratorState,
+    settings: Settings,
+    cover: CoverArt,
+    backdrop: { style: BackdropStyle; level: number } | null = null,
+  ): void {
     const { palette, mood, scene } = frame;
     const ctx = this.ctx;
+
+    if (backdrop) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      this.backdrop.setCover(cover.image);
+      this.backdrop.render(ctx, this.width, this.height, mood, palette, backdrop.style, backdrop.level);
+      const primitive = this.primitives.get(state.baseId);
+      if (primitive && state.baseWeight > 0.01) {
+        primitive.draw({
+          ...frame, ctx, params: state.baseParams,
+          tuning: state.tunings.get(state.baseId) ?? {}, weight: state.baseWeight, fade: 1,
+        });
+      }
+      return;
+    }
 
     // Заливка фоном служит и очисткой, и затуханием следов: чем ниже alpha,
     // тем дольше живут прошлые кадры.

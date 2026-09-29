@@ -19,6 +19,7 @@
  *   + новизна − недавнее использование − перегрузка кадра.
  */
 
+import type { BackdropStyle } from '../render/backdrop.ts';
 import { mulberry32 } from '../render/seed.ts';
 import type { ParticleType } from '../render/particles.ts';
 import { ALL_PRIMITIVE_IDS, type PrimitiveId } from '../render/primitives/types.ts';
@@ -95,6 +96,10 @@ export interface DirectorOutput {
   typography: number;
   /** Доля обложки с названием в центре кадра, 0..1. */
   centerpiece: number;
+  /** Стиль задника, который просит сцена. */
+  backdrop: BackdropStyle;
+  /** Яркость задника 0..1 — от состояния музыки. */
+  backdropLevel: number;
   /** Разрешены ли призраки ударов. */
   ghosts: boolean;
   modifiers: FrameModifiers;
@@ -115,21 +120,26 @@ interface Emphasis {
   background: number;
   particles: number;
   typography: number;
+  /**
+   * Яркость задника. На пике она ниже, чем в куплете: там свет даёт сам
+   * эффект, а яркий задник вместе со свечением уводил кадр в серую пелену.
+   */
+  backdrop: number;
 }
 
 const EMPHASIS: Record<MusicalState, Emphasis> = {
-  IDLE: { primary: 0.4, secondary: 0, background: 0.2, particles: 0.1, typography: 0.5 },
-  SILENCE: { primary: 0.4, secondary: 0, background: 0.2, particles: 0.1, typography: 0.5 },
-  AMBIENT: { primary: 0.8, secondary: 0.4, background: 0.6, particles: 0.35, typography: 0.7 },
-  BUILD: { primary: 0.9, secondary: 0.5, background: 0.4, particles: 0.55, typography: 0.5 },
-  RISING: { primary: 0.95, secondary: 0.55, background: 0.35, particles: 0.75, typography: 0.35 },
-  IMPACT: { primary: 1, secondary: 0.6, background: 0.3, particles: 0.9, typography: 0.1 },
-  PEAK: { primary: 1, secondary: 0.6, background: 0.3, particles: 0.85, typography: 0.15 },
-  RHYTHMIC: { primary: 1, secondary: 0.6, background: 0.3, particles: 0.6, typography: 0.4 },
-  VOCAL_FOCUS: { primary: 0.55, secondary: 0.3, background: 0.6, particles: 0.3, typography: 1 },
-  BREAKDOWN: { primary: 0.7, secondary: 0.3, background: 0.5, particles: 0.25, typography: 0.8 },
-  TRANSITION: { primary: 0.9, secondary: 0.5, background: 0.4, particles: 0.5, typography: 0.4 },
-  CHAOTIC: { primary: 1, secondary: 0.8, background: 0.4, particles: 0.9, typography: 0.1 },
+  IDLE: { primary: 0.4, secondary: 0, background: 0.2, particles: 0.1, typography: 0.5, backdrop: 0.45 },
+  SILENCE: { primary: 0.4, secondary: 0, background: 0.2, particles: 0.1, typography: 0.5, backdrop: 0.4 },
+  AMBIENT: { primary: 0.8, secondary: 0.4, background: 0.6, particles: 0.35, typography: 0.7, backdrop: 0.65 },
+  BUILD: { primary: 0.9, secondary: 0.5, background: 0.4, particles: 0.55, typography: 0.6, backdrop: 0.7 },
+  RISING: { primary: 0.95, secondary: 0.55, background: 0.35, particles: 0.75, typography: 0.5, backdrop: 0.72 },
+  IMPACT: { primary: 1, secondary: 0.6, background: 0.3, particles: 0.9, typography: 0.45, backdrop: 0.75 },
+  PEAK: { primary: 1, secondary: 0.6, background: 0.3, particles: 0.85, typography: 0.5, backdrop: 0.62 },
+  RHYTHMIC: { primary: 1, secondary: 0.6, background: 0.3, particles: 0.6, typography: 0.6, backdrop: 0.7 },
+  VOCAL_FOCUS: { primary: 0.55, secondary: 0.3, background: 0.6, particles: 0.3, typography: 1, backdrop: 0.7 },
+  BREAKDOWN: { primary: 0.7, secondary: 0.3, background: 0.5, particles: 0.25, typography: 0.8, backdrop: 0.6 },
+  TRANSITION: { primary: 0.9, secondary: 0.5, background: 0.4, particles: 0.5, typography: 0.55, backdrop: 0.7 },
+  CHAOTIC: { primary: 1, secondary: 0.8, background: 0.4, particles: 0.9, typography: 0.4, backdrop: 0.65 },
 };
 
 const CAMERA_AMOUNT: Record<CameraStyle, number> = {
@@ -170,6 +180,7 @@ export class VisualDirector {
   private particleTrim = 1;
   private typography = 0.5;
   private centerpiece = 0;
+  private backdropLevel = 0.5;
   private camera: CameraStyle = 'static';
   private surpriseBudget = 0.5;
   private surpriseUntil = 0;
@@ -195,6 +206,8 @@ export class VisualDirector {
       feedback: 0.1,
       typography: 0.5,
       centerpiece: 0,
+      backdrop: 'aurora',
+      backdropLevel: 0.5,
       ghosts: false,
       modifiers: this.transitions.modifiers(0),
       complexity: 0, targetComplexity: 0.3,
@@ -718,6 +731,9 @@ export class VisualDirector {
     out.modifiers = mods;
     out.particleDensity = clamp01(this.particleDensity + params.get('particleBoost', 0) * 0.5 + mods.particleBurst * 0.6);
     out.typography = this.typography;
+    this.backdropLevel += (emphasis.backdrop - this.backdropLevel) * follow(dtSec, 0.8);
+    out.backdrop = this.scene.backdrop ?? 'aurora';
+    out.backdropLevel = this.backdropLevel;
     out.centerpiece = this.centerpiece < 0.005 ? 0 : this.centerpiece;
     out.ghosts = this.scene.ghosts ?? false;
 

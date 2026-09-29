@@ -20,6 +20,7 @@ import { Centerpiece } from '../src/ui/centerpiece.ts';
 import { NowPlayingCard } from '../src/ui/now-playing-card.ts';
 import { LyricsOverlay } from '../src/ui/lyrics-overlay.ts';
 import { SyncEngine } from '../src/lyrics/sync-engine.ts';
+import type { CoverArt } from '../src/cover/cover-art.ts';
 import type { NowPlayingTrack } from '../src/cover/now-playing.ts';
 import { DirectorRuntime } from '../src/director/runtime.ts';
 import { DirectorHud } from '../src/ui/director-hud.ts';
@@ -457,6 +458,13 @@ if (params.get('song') === '1') {
     ...DEMO_TRACK,
     coverUrl: params.get('cover') === '0' ? null : demoCover(),
   };
+  // Та же обложка — компоновщику: из неё задник и якорь палитры.
+  const songCover: CoverArt = { url: songTrack.coverUrl ?? '', image: null, colors: [] };
+  if (songTrack.coverUrl) {
+    const image = new Image();
+    image.onload = () => { songCover.image = image; };
+    image.src = songTrack.coverUrl;
+  }
 
   const at = Math.max(0, Number(params.get('at')) || 0) * 1000;
   for (let t = 0; t < at; t += VIRTUAL_STEP_MS) runtime.step(sim.mood(t, VIRTUAL_STEP_MS), settings);
@@ -468,7 +476,7 @@ if (params.get('song') === '1') {
     try {
       const centre = settings.cover.centerpiece ? step.output?.centerpiece ?? 0 : 0;
       compositor.centerpiece = centre;
-      const stats = compositor.render(mood, settings, { url: '', image: null, colors: [] }, step.output);
+      const stats = compositor.render(mood, settings, songCover, step.output);
       const position = t % DEMO_TRACK.durationMs;
       const track = { ...songTrack, progressMs: position };
       centerpiece.update(track, centre, step.features.bass * 0.4 + step.features.transientStrength * 0.6);

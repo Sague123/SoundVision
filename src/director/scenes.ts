@@ -13,6 +13,7 @@
  * у конкретного зрителя.
  */
 
+import type { BackdropStyle } from '../render/backdrop.ts';
 import type { ParticleType } from '../render/particles.ts';
 import type { PrimitiveId } from '../render/primitives/types.ts';
 import type { BindingSpec } from './binding.ts';
@@ -53,6 +54,8 @@ export interface SceneDef {
    * центра к лицу 1: кольцо обрамляет обложку, как в плеере. Нет поля — 0.
    */
   centerpiece?: number;
+  /** Что за эффектами: размытая обложка, аврора или небо с горизонтом. Нет поля — аврора. */
+  backdrop?: BackdropStyle;
   /**
    * Призраки ударов — мягкие пятна, гаснущие секундами. Органике к лицу,
    * геометрии и линиям — муть поверх рисунка. Нет поля — выключены.
@@ -101,7 +104,7 @@ export const SCENES: SceneDef[] = [
     name: 'Dark Cyber Flow',
     layers: [
       { primitive: 'wave-grid-3d', role: 'primary', weight: 1 },
-      { primitive: 'flow-field', role: 'background', weight: 0.12 },
+      { primitive: 'flow-field', role: 'background', weight: 0.4 },
     ],
     particles: ['dust', 'sparks'],
     particleDensity: 0.45,
@@ -109,6 +112,7 @@ export const SCENES: SceneDef[] = [
     camera: 'smooth',
     feedback: 0.12,
     typography: 0.7,
+    backdrop: 'horizon',
     complexity: 0.45,
     fits: { BUILD: 0.8, RISING: 0.85, PEAK: 0.75, RHYTHMIC: 0.7, TRANSITION: 0.5, AMBIENT: 0.4 },
     affinity: { bass: 0.5, energy: 0.3, beatConfidence: 0.2 },
@@ -124,14 +128,17 @@ export const SCENES: SceneDef[] = [
     name: 'Spectrum Stage',
     layers: [
       { primitive: 'spectrum', role: 'primary', weight: 1 },
-      { primitive: 'wave-mesh', role: 'background', weight: 0.1 },
+      // За спектром — потоки линий: движение в глубине кадра, а не вторая
+      // яркая волна поверх столбцов.
+      { primitive: 'flow-field', role: 'background', weight: 0.35 },
     ],
     particles: ['sparks', 'streaks'],
     particleDensity: 0.55,
     lighting: { bloom: 0.6, rays: 0.25, rim: 0.12 },
     camera: 'aggressive',
     feedback: 0.08,
-    typography: 0.35,
+    typography: 0.5,
+    backdrop: 'cover',
     complexity: 0.6,
     fits: { PEAK: 0.9, IMPACT: 0.85, RHYTHMIC: 0.8, CHAOTIC: 0.7, RISING: 0.55 },
     affinity: { treble: 0.3, highMid: 0.3, rhythmicDensity: 0.4 },
@@ -146,7 +153,7 @@ export const SCENES: SceneDef[] = [
     name: 'Radial Core',
     layers: [
       { primitive: 'radial-waveform', role: 'primary', weight: 1 },
-      { primitive: 'metaballs', role: 'background', weight: 0.1 },
+      { primitive: 'flow-field', role: 'background', weight: 0.45 },
     ],
     particles: ['bokeh', 'sparks'],
     particleDensity: 0.35,
@@ -155,6 +162,7 @@ export const SCENES: SceneDef[] = [
     feedback: 0.15,
     typography: 1,
     centerpiece: 1,
+    backdrop: 'cover',
     complexity: 0.35,
     fits: { VOCAL_FOCUS: 0.9, AMBIENT: 0.6, BREAKDOWN: 0.7, RHYTHMIC: 0.5 },
     affinity: { vocalLikelihood: 0.6, mid: 0.3 },
@@ -180,6 +188,7 @@ export const SCENES: SceneDef[] = [
     feedback: 0,
     typography: 0.9,
     centerpiece: 1,
+    backdrop: 'aurora',
     complexity: 0.3,
     fits: { VOCAL_FOCUS: 0.8, AMBIENT: 0.8, BREAKDOWN: 0.75, RHYTHMIC: 0.6, IDLE: 0.5, BUILD: 0.45 },
     affinity: { rhythmicDensity: 0.3, lowMid: 0.2, vocalLikelihood: 0.3 },
@@ -194,7 +203,7 @@ export const SCENES: SceneDef[] = [
     name: 'Organic Fluid',
     layers: [
       { primitive: 'metaballs', role: 'primary', weight: 1 },
-      { primitive: 'wave-mesh', role: 'secondary', weight: 0.25 },
+      { primitive: 'wave-mesh', role: 'secondary', weight: 0.45 },
     ],
     particles: ['bokeh', 'embers', 'dust'],
     particleDensity: 0.3,
@@ -202,6 +211,7 @@ export const SCENES: SceneDef[] = [
     camera: 'orbit',
     feedback: 0.3,
     typography: 0.8,
+    backdrop: 'aurora',
     ghosts: true,
     complexity: 0.45,
     fits: { AMBIENT: 0.85, BREAKDOWN: 0.8, VOCAL_FOCUS: 0.7, BUILD: 0.4 },
@@ -224,7 +234,8 @@ export const SCENES: SceneDef[] = [
     lighting: { bloom: 0.45, rays: 0.15, rim: 0.3 },
     camera: 'orbit',
     feedback: 0.2,
-    typography: 0.3,
+    typography: 0.45,
+    backdrop: 'cover',
     complexity: 0.65,
     fits: { RHYTHMIC: 0.85, PEAK: 0.7, CHAOTIC: 0.75, TRANSITION: 0.6 },
     affinity: { rhythmicDensity: 0.5, beatConfidence: 0.3 },
@@ -236,7 +247,7 @@ export const SCENES: SceneDef[] = [
     name: 'Terrain Flight',
     layers: [
       { primitive: 'waveform-terrain', role: 'primary', weight: 1 },
-      { primitive: 'flow-field', role: 'background', weight: 0.1 },
+      { primitive: 'flow-field', role: 'background', weight: 0.3 },
     ],
     particles: ['dust', 'streaks'],
     particleDensity: 0.35,
@@ -244,6 +255,7 @@ export const SCENES: SceneDef[] = [
     camera: 'forward',
     feedback: 0.1,
     typography: 0.6,
+    backdrop: 'horizon',
     complexity: 0.5,
     fits: { BUILD: 0.85, RISING: 0.7, AMBIENT: 0.55, BREAKDOWN: 0.4 },
     affinity: { energyTrend: 0.5, mid: 0.2 },
@@ -257,6 +269,7 @@ export const SCENES: SceneDef[] = [
       // Одна раскалённая линия волны: на тихом месте кадр держит она одна,
       // а на подъёме её пряди раскрываются веером.
       { primitive: 'waveform-ribbon', role: 'primary', weight: 1 },
+      { primitive: 'wave-mesh', role: 'background', weight: 0.4 },
     ],
     particles: ['dust'],
     particleDensity: 0.15,
@@ -264,6 +277,7 @@ export const SCENES: SceneDef[] = [
     camera: 'static',
     feedback: 0.05,
     typography: 0.9,
+    backdrop: 'cover',
     complexity: 0.15,
     fits: { SILENCE: 0.9, IDLE: 1, AMBIENT: 0.65, BREAKDOWN: 0.75, VOCAL_FOCUS: 0.5 },
     affinity: { silenceLevel: 0.4, vocalLikelihood: 0.3 },
@@ -285,7 +299,8 @@ export const SCENES: SceneDef[] = [
     lighting: { bloom: 0.6, rays: 0.3, rim: 0.3 },
     camera: 'aggressive',
     feedback: 0.15,
-    typography: 0.25,
+    typography: 0.45,
+    backdrop: 'aurora',
     complexity: 0.6,
     fits: { PEAK: 0.85, IMPACT: 0.9, CHAOTIC: 0.6, RISING: 0.5 },
     affinity: { bass: 0.4, energy: 0.4, dynamicRange: 0.2 },
@@ -305,6 +320,7 @@ export const SCENES: SceneDef[] = [
     camera: 'smooth',
     feedback: 0.15,
     typography: 0.5,
+    backdrop: 'cover',
     complexity: 0.55,
     fits: { RHYTHMIC: 0.75, CHAOTIC: 0.8, TRANSITION: 0.55 },
     affinity: { rhythmicDensity: 0.5, zeroCrossingRate: 0.3 },

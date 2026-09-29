@@ -60,8 +60,12 @@ const LUMA_HEIGHT = 9;
 const LUMA_INTERVAL_FRAMES = 6;
 /** К какой яркости автоэкспозиция тянет самые светлые места кадра. */
 const AUTO_EXPOSURE_PEAK = 0.62;
-/** Сильнее не поднимаем: иначе тишина раздувается в серый шум. */
-const AUTO_EXPOSURE_MAX = 2.6;
+/**
+ * Сильнее не поднимаем. Раньше предел был 2.6 — тогда тихие части были почти
+ * чёрными. Теперь кадр всегда закрыт задником, и сильный подъём только
+ * засвечивает его в молочную пелену: автоэкспозиция лишь подправляет.
+ */
+const AUTO_EXPOSURE_MAX = 1.3;
 /** Зонд экспозиции: достаточно мелкий, чтобы тонкие линии не растворялись. */
 const EXPOSURE_WIDTH = 128;
 const EXPOSURE_HEIGHT = 72;
@@ -219,7 +223,14 @@ export class Compositor {
       timeMs: mood.timeMs,
     };
 
-    if (settings.layers.base.enabled) this.base.render(frame, state, settings, cover);
+    // Задник есть всегда, кроме режима «обложка фоном» из настроек: у того
+    // своя отрисовка. Без режиссёра — размытая обложка средней яркости.
+    const backdrop = settings.cover.useAsBackground
+      ? null
+      : direction
+        ? { style: direction.backdrop, level: direction.backdropLevel }
+        : { style: 'cover' as const, level: 0.55 };
+    if (settings.layers.base.enabled) this.base.render(frame, state, settings, cover, backdrop);
     const activePrimitives = settings.layers.genre.enabled
       ? this.genre.render(frame, state, clamp01(settings.memory.trails))
       : [];
