@@ -1,4 +1,5 @@
 import { mulberry32, type GeneratorSeed, type Rng } from '../seed.ts';
+import { SpectrumBands } from './spectrum-bands.ts';
 import type { DrawPrimitive, RenderFrame } from './types.ts';
 
 /**
@@ -8,12 +9,8 @@ import type { DrawPrimitive, RenderFrame } from './types.ts';
  * растут от линии пола вверх, под полом — их отражение, гаснущее книзу:
  * так спектр стоит на сцене, а не висит полосой посреди кадра.
  *
- * Высота — в децибелах и складывается из двух частей. Главная — насколько
- * столбец сейчас громче своего же долгого среднего: так столбцы танцуют на
- * любом материале, а не стоят стеной там, где спектр ровный, и не упираются
- * в потолок басом. Вторая, меньшая — форма спектра относительно скользящего
- * максимума: без неё пропадает, где у трека вес. Всё вместе умножается на
- * общую энергию, поэтому дроп выше куплета.
+ * Высоты столбцов считает `SpectrumBands` — там же объяснено, почему они
+ * в децибелах относительно собственного среднего.
  *
  * Глитч от скачка flux: блочные сдвиги, выпадение блоков, дубли со
  * смещением цвета и «заедание» кадра на несколько кадров.
@@ -22,17 +19,6 @@ import type { DrawPrimitive, RenderFrame } from './types.ts';
 const MAX_BARS = 256;
 /** Сколько кадров держится замерший кадр спектра при «заедании». */
 const FREEZE_FRAMES = 4;
-/** Диапазон частот: ниже 35 Гц у динамиков ничего нет, выше 16 кГц — шум. */
-const LOW_HZ = 35;
-const HIGH_HZ = 16000;
-/** Сколько децибел под скользящим максимумом ещё видно. */
-const RANGE_DB = 54;
-/** Насколько столбец должен превысить своё среднее, чтобы дойти до потолка. */
-const SWING_DB = 18;
-/** Где стоит столбец, пока он равен своему среднему (0..1). */
-const REST_LEVEL = 0.3;
-/** Доля абсолютной формы спектра в высоте. */
-const SHAPE_SHARE = 0.25;
 /** Линия пола — доля высоты кадра. */
 const FLOOR = 0.64;
 
@@ -40,7 +26,8 @@ export class SpectrumPrimitive implements DrawPrimitive {
   readonly id = 'spectrum' as const;
   readonly kind = 'draw' as const;
 
-  private readonly values = new Float32Array(MAX_BARS);
+  private readonly bands = new SpectrumBands(MAX_BARS);
+  private readonly values = this.bands.values;
   private readonly peaks = new Float32Array(MAX_BARS);
   /** Замороженная копия для эффекта «заедания». */
   private readonly frozen = new Float32Array(MAX_BARS);
@@ -50,10 +37,6 @@ export class SpectrumPrimitive implements DrawPrimitive {
   private height = 1;
   private prevFlux = 0;
   private rainbow = true;
-  /** Скользящий максимум уровня, дБ. */
-  private topDb = -30;
-  /** Долгое среднее каждого столбца, дБ; NaN — ещё не набрано. */
-  private readonly averageDb = new Float32Array(MAX_BARS).fill(Number.NaN);
 
   resize(width: number, height: number): void {
     this.width = width;
@@ -66,8 +49,7 @@ export class SpectrumPrimitive implements DrawPrimitive {
     // треку — seed решает, брать её или палитру.
     this.rainbow = this.rng() < 0.5;
     this.peaks.fill(0);
-    this.values.fill(0);
-    this.averageDb.fill(Number.NaN);
+    this.bands.reset();
     this.freezeLeft = 0;
   }
 
@@ -81,7 +63,7 @@ export class SpectrumPrimitive implements DrawPrimitive {
     const bars = Math.min(MAX_BARS, Math.max(8, Math.round(total / 2)));
     const dt = frame.dtMs / 1000;
 
-    this.sample(mood.spectrum, mood.binHz, bars, dt, mood.energy);
+    this.bands.update(mood.spectrum, mood.binHz, bars, dt, mood.energy);
     this.updatePeaks(bars, dt * (1.4 - tuning.peaks));
 
     // Глитч копится от скачка flux: ровный сигнал его не вызывает.
@@ -187,61 +169,6 @@ export class SpectrumPrimitive implements DrawPrimitive {
     ctx.fillRect(half - (index + 1) * barWidth + inset - shiftX, y, w, height);
   }
 
-  /**
-   * Спектр сворачивается в столбцы по логарифму частоты. Там, где столбец
-   * уже одного бина (низ спектра), значение интерполируется между соседними
-   * бинами — иначе несколько столбцов подряд показывают один и тот же бин
-   * и стоят ступенькой.
-   */
-  private sample(spectrum: Float32Array, binHz: number, bars: number, dt: number, energy: number): void {
-    const hz = binHz > 0 ? binHz : 48000 / 2048;
-    const last = spectrum.length - 1;
-    const ratio = HIGH_HZ / LOW_HZ;
-    let frameTop = -120;
-    const release = 1 - Math.exp(-dt / 0.14);
-    const settle = 1 - Math.exp(-dt / 6);
-    const loudness = 0.35 + 0.65 * Math.max(0, Math.min(1, energy));
-    for (let i = 0; i < bars; i++) {
-      const lowBin = (LOW_HZ * Math.pow(ratio, i / bars)) / hz;
-      const highBin = (LOW_HZ * Math.pow(ratio, (i + 1) / bars)) / hz;
-      let magnitude: number;
-      if (highBin - lowBin < 1) {
-        const centre = Math.min(last, (lowBin + highBin) / 2);
-        const a = Math.floor(centre);
-        const t = centre - a;
-        magnitude = spectrum[a] * (1 - t) + spectrum[Math.min(last, a + 1)] * t;
-      } else {
-        magnitude = 0;
-        const end = Math.min(last, Math.ceil(highBin));
-        for (let bin = Math.floor(lowBin); bin <= end; bin++) {
-          if (spectrum[bin] > magnitude) magnitude = spectrum[bin];
-        }
-      }
-      const db = magnitude > 1e-6 ? 20 * Math.log10(magnitude) : -120;
-      if (db > frameTop) frameTop = db;
-
-      // Тишину в среднее не пускаем: после паузы столбцы не должны
-      // выстреливать от любого шороха.
-      let average = this.averageDb[i];
-      if (db > -100) {
-        average = Number.isNaN(average) ? db : average + (db - average) * settle;
-        this.averageDb[i] = average;
-      }
-      const swing = Number.isNaN(average) || db <= -100
-        ? 0
-        : clamp01(REST_LEVEL + ((db - average) / SWING_DB) * (1 - REST_LEVEL));
-      const shape = clamp01((db - (this.topDb - RANGE_DB)) / RANGE_DB);
-      const level = (swing * (1 - SHAPE_SHARE) + shape * shape * SHAPE_SHARE) * loudness;
-      // Атака мгновенная, спад — плавный.
-      this.values[i] = level > this.values[i] ? level : this.values[i] + (level - this.values[i]) * release;
-    }
-    // Максимум догоняет громкое сразу, а тихое — за несколько секунд.
-    if (frameTop > -100) {
-      const k = frameTop > this.topDb ? 1 - Math.exp(-dt / 0.08) : 1 - Math.exp(-dt / 4);
-      this.topDb += (frameTop - this.topDb) * k;
-    }
-  }
-
   private updatePeaks(bars: number, dt: number): void {
     for (let i = 0; i < bars; i++) {
       if (this.values[i] > this.peaks[i]) this.peaks[i] = this.values[i];
@@ -252,10 +179,6 @@ export class SpectrumPrimitive implements DrawPrimitive {
 
 /** Затухание отражения по ступеням сверху вниз. */
 const REFLECTION_ALPHA = [0.45, 0.22, 0.09];
-
-function clamp01(value: number): number {
-  return value < 0 ? 0 : value > 1 ? 1 : value;
-}
 
 /** Детерминированный псевдослучайный отсчёт: глитч не должен мерцать каждый кадр. */
 function hash(value: number): number {

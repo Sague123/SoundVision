@@ -62,14 +62,23 @@ export const PRIMITIVE_PARAMS: Record<PrimitiveId, readonly ParamSpec[]> = {
     gain('flow', 'Скорость сетки'),
     lineWidth,
   ],
-  'waveform-terrain': [
-    { key: 'depth', label: 'Глубина истории', min: 20, max: 190, step: 5, def: 120, format: 'plain',
-      hint: 'Сколько кадров волны уходит вглубь' },
-    share('perspective', 'Шаг перспективы', 0.5, 'Насколько дальние кадры поднимаются и сжимаются'),
-    gain('verticalGain', 'Усиление по вертикали'),
+  'waveform-ribbon': [
+    gain('amplitude', 'Размах волны'),
+    { key: 'strands', label: 'Число прядей', min: 0, max: 10, step: 1, def: 6, format: 'plain',
+      wide: [0, 12], hint: 'Цветные линии вокруг сердцевины; 0 — одна белая линия' },
+    share('spread', 'Раскрытие прядей', 0.8, 'Насколько пряди расходятся на громком'),
+    share('smoothing', 'Сглаживание', 0.4, 'Больше — плавнее и спокойнее линия'),
+    share('core', 'Яркость ядра', 0.9),
     lineWidth,
-    share('reflection', 'Сила отражения', 0.6, 'Зеркало ниже горизонта — «вода» из референса'),
-    share('rain', 'Плотность штрихов', 0.5, 'Вертикальный «дождь» от гребней'),
+  ],
+  'waveform-terrain': [
+    { key: 'depth', label: 'Число хребтов', min: 16, max: 96, step: 1, def: 48, format: 'plain',
+      wide: [8, 96], hint: 'Сколько строк истории спектра уходит к горизонту' },
+    share('perspective', 'Высота взгляда', 0.5, 'Выше — горизонт выше, больше земли в кадре'),
+    gain('verticalGain', 'Высота гор'),
+    share('occlusion', 'Хребты закрывают дальние', 1, '0 — все линии видны насквозь'),
+    gain('flow', 'Скорость полёта'),
+    lineWidth,
   ],
   'wave-mesh': [
     { key: 'lines', label: 'Число линий', min: 20, max: 150, step: 1, def: 110, format: 'plain',
@@ -94,6 +103,7 @@ export const PRIMITIVE_PARAMS: Record<PrimitiveId, readonly ParamSpec[]> = {
     gain('amplitude', 'Амплитуда'),
     { key: 'rings', label: 'Число колец', min: 1, max: 4, step: 1, def: 2, format: 'plain' },
     gain('spin', 'Скорость вращения'),
+    share('eq', 'Радиальный эквалайзер', 0.7, 'Столбцы спектра лучами вокруг кольца; 0 — выключить'),
     lineWidth,
   ],
   oscilloscope: [

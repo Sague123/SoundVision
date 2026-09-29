@@ -101,9 +101,11 @@ export class BaseLayer {
     if (scene.light.flash > 0.01) {
       const x = scene.light.x * this.width;
       const y = scene.light.y * this.height;
-      const radius = Math.min(this.width, this.height) * (0.25 + scene.light.flash * 0.35);
+      // Свечение — намёк, а не пятно: на плотных ударах оно не успевает
+      // погаснуть, и при прежних 0.3 на полкадра висела мутная дымка.
+      const radius = Math.min(this.width, this.height) * (0.18 + scene.light.flash * 0.22);
       const glow = ctx.createRadialGradient(x, y, 0, x, y, radius);
-      glow.addColorStop(0, palette.accentAlpha(scene.light.warmth, Math.min(0.3, scene.light.flash * 0.3)));
+      glow.addColorStop(0, palette.accentAlpha(scene.light.warmth, Math.min(0.1, scene.light.flash * 0.1)));
       glow.addColorStop(1, palette.accentAlpha(scene.light.warmth, 0));
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';

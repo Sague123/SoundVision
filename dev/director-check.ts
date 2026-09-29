@@ -13,6 +13,7 @@ import { EffectSlot } from '../src/director/lifecycle.ts';
 import { PreferenceModel } from '../src/director/learning.ts';
 import { MusicalStateMachine, type MusicalState } from '../src/director/musical-state.ts';
 import { DirectorRuntime } from '../src/director/runtime.ts';
+import { EffectiveSettings } from '../src/director/effective-settings.ts';
 import { defaultSettings, type Settings } from '../src/settings.ts';
 import { DEFAULT_SONG, SongSimulator, type SongSegment } from './song-sim.ts';
 
@@ -525,6 +526,40 @@ function fresh(): DirectorRuntime {
   }
   const dead = Object.entries(seen).filter(([, v]) => !v).map(([k]) => k);
   check('каждая привязка сцены меняет выход режиссёра', dead.length === 0, dead.length ? `мёртвые: ${dead.join(', ')}` : 'все пять живые');
+}
+
+// --- Что сцена решает вокруг главного слоя ----------------------------------
+{
+  /**
+   * Обложка в центре и призраки ударов — решение сцены, а не настройка на всё
+   * подряд: кольцу нужна обложка в центре, линиям и спектру — нет; пятна
+   * прошлых ударов к лицу органике и мутят геометрию.
+   */
+  const lockedOutput = (scene: string) => {
+    const settings = defaultSettings();
+    settings.director.mode = 'semi';
+    settings.director.lockedScene = scene;
+    const runtime = fresh();
+    const sim = new SongSimulator([{ part: 'vocal', fromSec: 0, toSec: 10 }]);
+    let out = null as ReturnType<DirectorRuntime['step']>['output'];
+    for (let t = 0; t < 8000; t += FRAME_MS) out = runtime.step(sim.mood(t, FRAME_MS), settings).output;
+    return { out: out!, settings };
+  };
+  const ring = lockedOutput('radial-core');
+  const bars = lockedOutput('spectrum-stage');
+  check('обложка в центре — у кольца есть, у спектра нет',
+    ring.out.centerpiece > 0.9 && bars.out.centerpiece < 0.01,
+    `кольцо ${ring.out.centerpiece.toFixed(2)}, спектр ${bars.out.centerpiece.toFixed(2)}`);
+
+  const organic = lockedOutput('organic-fluid');
+  const effective = new EffectiveSettings();
+  const barsGhosts = effective.derive(bars.settings, bars.out).memory.ghosts;
+  const organicGhosts = effective.derive(organic.settings, organic.out).memory.ghosts;
+  organic.settings.memory.ghosts = false;
+  const userOff = effective.derive(organic.settings, organic.out).memory.ghosts;
+  check('призраки ударов — только где сцена их хочет, и не против воли пользователя',
+    !barsGhosts && organicGhosts && !userOff,
+    `спектр ${barsGhosts}, органика ${organicGhosts}, органика при выключенных ${userOff}`);
 }
 
 console.log(failures === 0 ? '\nрежиссёр: всё сошлось' : `\nрежиссёр: проблем ${failures}`);

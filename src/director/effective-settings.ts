@@ -50,6 +50,8 @@ export class EffectiveSettings {
     e.camera.amount = clamp01(d.cameraAmount * ratio(user.camera.amount, DEFAULTS.camera.amount));
     // Тряску режиссёр может только запретить, но не включить выключенную.
     e.transients.shake = user.transients.shake && d.shake;
+    // Призраки ударов — тоже только запрет: пятна уместны не каждой сцене.
+    e.memory.ghosts = user.memory.ghosts && d.ghosts;
     return e;
   }
 

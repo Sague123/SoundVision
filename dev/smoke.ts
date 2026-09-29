@@ -16,6 +16,7 @@
 import '../src/style.css';
 import { idleMood, type MoodVector } from '../src/audio/mood-vector.ts';
 import { Compositor } from '../src/render/compositor.ts';
+import { Centerpiece } from '../src/ui/centerpiece.ts';
 import { NowPlayingCard } from '../src/ui/now-playing-card.ts';
 import { LyricsOverlay } from '../src/ui/lyrics-overlay.ts';
 import { SyncEngine } from '../src/lyrics/sync-engine.ts';
@@ -441,7 +442,14 @@ if (params.get('song') === '1') {
   settings.director.hud = true;
   const hud = new DirectorHud(() => {}, () => {});
   hud.setVisible(true);
-  root.append(hud.element, hud.questionElement);
+  // Обложка в центре проверяется с картинкой: `?cover=0` — путь с монограммой.
+  const centerpiece = new Centerpiece();
+  centerpiece.resize(window.innerWidth, window.innerHeight);
+  root.append(centerpiece.element, hud.element, hud.questionElement);
+  const songTrack: NowPlayingTrack = {
+    ...DEMO_TRACK,
+    coverUrl: params.get('cover') === '0' ? null : demoCover(),
+  };
 
   const at = Math.max(0, Number(params.get('at')) || 0) * 1000;
   for (let t = 0; t < at; t += VIRTUAL_STEP_MS) runtime.step(sim.mood(t, VIRTUAL_STEP_MS), settings);
@@ -451,9 +459,13 @@ if (params.get('song') === '1') {
     const mood = sim.mood(t, VIRTUAL_STEP_MS);
     const step = runtime.step(mood, settings);
     try {
+      const centre = settings.cover.centerpiece ? step.output?.centerpiece ?? 0 : 0;
+      compositor.centerpiece = centre;
       const stats = compositor.render(mood, settings, { url: '', image: null, colors: [] }, step.output);
       const position = t % DEMO_TRACK.durationMs;
-      card.update({ ...DEMO_TRACK, progressMs: position }, settings, t);
+      const track = { ...songTrack, progressMs: position };
+      centerpiece.update(track, centre, step.features.bass * 0.4 + step.features.transientStrength * 0.6);
+      card.update(track, settings, t, centre > 0.4);
       lyricsOverlay.update(syncEngine.locate(position % (DEMO_LINES.length * 4000)),
         settings, stats.palette, mood, stats.meanLuminance, step.output?.typography ?? 1);
       hud.update(step, settings, t);
@@ -483,3 +495,23 @@ if (params.get('song') === '1') {
   requestAnimationFrame(frame);
 }
 
+/** Демо-обложка: градиент и пара фигур — чтобы путь с картинкой было видно на снимке. */
+function demoCover(): string {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d')!;
+  const gradient = ctx.createLinearGradient(0, 0, 256, 256);
+  gradient.addColorStop(0, '#2b1055');
+  gradient.addColorStop(0.55, '#d53369');
+  gradient.addColorStop(1, '#f6a44c');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.beginPath();
+  ctx.arc(128, 118, 46, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(20,10,40,0.9)';
+  ctx.fillRect(0, 170, 256, 86);
+  return canvas.toDataURL('image/png');
+}

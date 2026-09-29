@@ -53,7 +53,11 @@ export class NowPlayingCard {
     this.progressLine.append(this.progressBar);
   }
 
-  update(track: NowPlayingTrack | null, settings: Settings, nowMs: number): void {
+  /**
+   * @param yieldToCentre — название уже стоит в центре кадра: карточка
+   *   уходит, чтобы оно не стояло дважды. Линия прогресса остаётся.
+   */
+  update(track: NowPlayingTrack | null, settings: Settings, nowMs: number, yieldToCentre = false): void {
     const mode = settings.cover.card;
     const key = track ? `${track.artist}|${track.title}` : '';
 
@@ -65,7 +69,7 @@ export class NowPlayingCard {
 
     // При смене трека карточка живёт заданное время; в режиме «всегда» — постоянно.
     const withinHold = nowMs - this.shownAt < settings.cover.cardHoldSec * 1000;
-    const visible = Boolean(track) && mode !== 'never' && (mode === 'always' || withinHold);
+    const visible = Boolean(track) && mode !== 'never' && (mode === 'always' || withinHold) && !yieldToCentre;
 
     this.element.classList.toggle('now-playing--hidden', !visible);
     // Мелкий вариант — для постоянного показа: он не должен спорить с картинкой.

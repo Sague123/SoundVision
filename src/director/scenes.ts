@@ -48,6 +48,16 @@ export interface SceneDef {
   feedback: number;
   /** Насколько сцене к лицу текст песни, 0..1. */
   typography: number;
+  /**
+   * Обложка и название трека в центре кадра, 0..1. Сцене с кольцом вокруг
+   * центра к лицу 1: кольцо обрамляет обложку, как в плеере. Нет поля — 0.
+   */
+  centerpiece?: number;
+  /**
+   * Призраки ударов — мягкие пятна, гаснущие секундами. Органике к лицу,
+   * геометрии и линиям — муть поверх рисунка. Нет поля — выключены.
+   */
+  ghosts?: boolean;
   /** Собственная визуальная сложность сцены, 0..1. */
   complexity: number;
   /** Уместность по музыкальному состоянию — глобальное знание. */
@@ -144,6 +154,7 @@ export const SCENES: SceneDef[] = [
     camera: 'static',
     feedback: 0.15,
     typography: 1,
+    centerpiece: 1,
     complexity: 0.35,
     fits: { VOCAL_FOCUS: 0.9, AMBIENT: 0.6, BREAKDOWN: 0.7, RHYTHMIC: 0.5 },
     affinity: { vocalLikelihood: 0.6, mid: 0.3 },
@@ -166,6 +177,7 @@ export const SCENES: SceneDef[] = [
     camera: 'orbit',
     feedback: 0.3,
     typography: 0.8,
+    ghosts: true,
     complexity: 0.45,
     fits: { AMBIENT: 0.85, BREAKDOWN: 0.8, VOCAL_FOCUS: 0.7, BUILD: 0.4 },
     affinity: { lowMid: 0.4, vocalLikelihood: 0.2, energyTrend: -0.2 },
@@ -217,7 +229,9 @@ export const SCENES: SceneDef[] = [
     id: 'deep-minimal',
     name: 'Deep Minimal',
     layers: [
-      { primitive: 'oscilloscope', role: 'primary', weight: 1 },
+      // Одна раскалённая линия волны: на тихом месте кадр держит она одна,
+      // а на подъёме её пряди раскрываются веером.
+      { primitive: 'waveform-ribbon', role: 'primary', weight: 1 },
     ],
     particles: ['dust'],
     particleDensity: 0.15,
@@ -227,7 +241,7 @@ export const SCENES: SceneDef[] = [
     typography: 0.9,
     complexity: 0.15,
     fits: { SILENCE: 0.9, IDLE: 1, AMBIENT: 0.65, BREAKDOWN: 0.75, VOCAL_FOCUS: 0.5 },
-    affinity: { silenceLevel: 0.4, stereoWidth: 0.4 },
+    affinity: { silenceLevel: 0.4, vocalLikelihood: 0.3 },
     traits: ['minimal', 'dark'],
     bindings: {
       ...COMMON_BINDINGS,
@@ -284,6 +298,7 @@ export function findScene(id: string): SceneDef {
  */
 export const PRIMITIVE_COMPLEXITY: Record<PrimitiveId, number> = {
   'wave-grid-3d': 0.4,
+  'waveform-ribbon': 0.25,
   'waveform-terrain': 0.45,
   'wave-mesh': 0.35,
   spectrum: 0.45,

@@ -3,6 +3,7 @@
  * измерение fps и авто-подстройка тяжёлого raymarch под реальную машину.
  */
 
+import { CENTERPIECE_HOLE } from './centerpiece-geometry.ts';
 import { clamp, clamp01 } from '../audio/features.ts';
 import type { MoodVector } from '../audio/mood-vector.ts';
 import type { CoverArt } from '../cover/cover-art.ts';
@@ -117,6 +118,11 @@ export class Compositor {
   private stableFrame = 0;
   /** Настройки с наложенными решениями режиссёра — один объект на всё время. */
   private readonly effective = new EffectiveSettings();
+  /**
+   * Доля центральной обложки, 0..1. Её решает `main`: он знает, есть ли трек
+   * и не стоит ли текст песни по центру. Рендер только держит под неё круг.
+   */
+  centerpiece = 0;
   private direction: DirectorOutput | null = null;
   private meanLuminance = 0.2;
   private frameCounter = 0;
@@ -190,7 +196,7 @@ export class Compositor {
 
     // Сцена идёт первой: от неё зависят и палитра, и набор примитивов, и камера.
     const warp = direction ? direction.modifiers.warp * 0.6 : 0;
-    const scene = this.scene.update(mood, sceneConfig(settings, this.stableFrame, warp));
+    const scene = this.scene.update(mood, sceneConfig(settings, this.stableFrame, warp, direction ? DIRECTED_IMPACT_SPREAD : 1));
     if (direction) applyGlitch(scene, direction.modifiers.glitch);
     const palette = this.buildPalette(mood, settings, cover, harmony);
     this.lastPalette = palette;
@@ -203,6 +209,7 @@ export class Compositor {
     this.stableFrame = state.stableFrame;
 
     const frame: Omit<RenderFrame, 'ctx' | 'params' | 'weight' | 'tuning' | 'fade'> = {
+      hole: this.centerpiece * CENTERPIECE_HOLE,
       width: this.width,
       height: this.height,
       mood,
@@ -610,7 +617,10 @@ function coverScale(width: number, height: number, roll: number): number {
  *   горизонт. На неё приглушаются деформации: перспективная сетка, согнутая
  *   domain warp'ом, перестаёт читаться как пол.
  */
-function sceneConfig(settings: Settings, stableFrame: number, warp = 0): SceneConfig {
+/** Разброс ударов под режиссёром: они приходят из центра композиции. */
+const DIRECTED_IMPACT_SPREAD = 0.2;
+
+function sceneConfig(settings: Settings, stableFrame: number, warp = 0, impactSpread = 1): SceneConfig {
   const t = settings.transients;
   return {
     intensity: clamp01(t.intensity),
@@ -642,6 +652,7 @@ function sceneConfig(settings: Settings, stableFrame: number, warp = 0): SceneCo
     smear: clamp01(settings.memory.smear),
     echo: clamp01(settings.memory.echo),
     ghosts: settings.memory.ghosts,
+    impactSpread,
     flare: settings.light.flare,
     budget: Math.max(0, settings.motion.budget),
     motion: clamp01(settings.motion.amount),

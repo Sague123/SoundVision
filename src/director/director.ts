@@ -93,6 +93,10 @@ export interface DirectorOutput {
   feedback: number;
   /** Насколько вперёд выходит текст песни, 0..1. */
   typography: number;
+  /** Доля обложки с названием в центре кадра, 0..1. */
+  centerpiece: number;
+  /** Разрешены ли призраки ударов. */
+  ghosts: boolean;
   modifiers: FrameModifiers;
   complexity: number;
   targetComplexity: number;
@@ -165,6 +169,7 @@ export class VisualDirector {
   /** Сколько частиц оставляет контроль сложности, 0.45..1. */
   private particleTrim = 1;
   private typography = 0.5;
+  private centerpiece = 0;
   private camera: CameraStyle = 'static';
   private surpriseBudget = 0.5;
   private surpriseUntil = 0;
@@ -189,6 +194,8 @@ export class VisualDirector {
       camera: 'static', cameraAmount: 0.1, shake: false,
       feedback: 0.1,
       typography: 0.5,
+      centerpiece: 0,
+      ghosts: false,
       modifiers: this.transitions.modifiers(0),
       complexity: 0, targetComplexity: 0.3,
       scene: this.scene,
@@ -700,6 +707,9 @@ export class VisualDirector {
     const typoTarget = this.scene.typography * emphasis.typography
       * (0.5 + profile.typographyPreference);
     this.typography += (clamp01(typoTarget) - this.typography) * follow(dtSec, 0.6);
+    // Обложка уходит на время сюрприза: в центре тогда стоит сюрприз.
+    const centreTarget = this.surprisePrimitive ? 0 : clamp01(this.scene.centerpiece ?? 0);
+    this.centerpiece += (centreTarget - this.centerpiece) * follow(dtSec, 0.5);
 
     const mods = this.transitions.modifiers(now);
     // Привязка сцены «деформация ← звук» ложится поверх волны перехода. Без
@@ -708,6 +718,8 @@ export class VisualDirector {
     out.modifiers = mods;
     out.particleDensity = clamp01(this.particleDensity + params.get('particleBoost', 0) * 0.5 + mods.particleBurst * 0.6);
     out.typography = this.typography;
+    out.centerpiece = this.centerpiece < 0.005 ? 0 : this.centerpiece;
+    out.ghosts = this.scene.ghosts ?? false;
 
     const glow = params.get('glow', 1);
     out.bloom = clamp01(this.scene.lighting.bloom * glow + mods.flash * 0.5 + (this.surprisePrimitive ? 0.3 : 0));

@@ -1,4 +1,5 @@
 import { mulberry32, type GeneratorSeed } from '../seed.ts';
+import { SpectrumBands } from './spectrum-bands.ts';
 import type { DrawPrimitive, RenderFrame } from './types.ts';
 import { WaveformGain } from './waveform-gain.ts';
 
@@ -8,9 +9,15 @@ import { WaveformGain } from './waveform-gain.ts';
  * Центр остаётся пустым — там место обложке трека. Зеркальная симметрия по N
  * лучам берётся от seed: один трек получает четыре сектора, другой девять, и
  * кольца выглядят по-разному при том же сигнале.
+ *
+ * Снаружи колец — радиальный эквалайзер: столбцы спектра расходятся лучами,
+ * низ частот сверху, верх — к низу, левая половина зеркалит правую. Кольцо
+ * рисует саму волну, лучи — из чего она сложена.
  */
 
 const SAMPLES = 360;
+/** Лучей эквалайзера на половину круга. */
+const EQ_BARS = 48;
 
 export class RadialWaveformPrimitive implements DrawPrimitive {
   readonly id = 'radial-waveform' as const;
@@ -23,6 +30,8 @@ export class RadialWaveformPrimitive implements DrawPrimitive {
   private rays = 6;
   private spin = 0;
   private direction = 1;
+  private readonly bands = new SpectrumBands(EQ_BARS);
+  private rainbow = false;
 
   resize(width: number, height: number): void {
     this.width = width;
@@ -34,6 +43,8 @@ export class RadialWaveformPrimitive implements DrawPrimitive {
     this.rays = 3 + Math.floor(rng() * 8);
     this.direction = rng() < 0.5 ? -1 : 1;
     this.spin = rng() * Math.PI * 2;
+    this.rainbow = rng() < 0.5;
+    this.bands.reset();
   }
 
   dispose(): void {}
@@ -46,7 +57,11 @@ export class RadialWaveformPrimitive implements DrawPrimitive {
     const cy = this.height / 2;
     const minSide = Math.min(this.width, this.height);
     // Внутренний радиус — дыра под карточку трека.
-    const inner = minSide * (0.12 + params.scale * 0.08) * tuning.radius;
+    // Под обложкой кольцо расступается: оно обрамляет её, а не лезет сверху.
+    const inner = Math.max(
+      minSide * (0.12 + params.scale * 0.08) * tuning.radius,
+      minSide * frame.hole,
+    );
     const amplitude = minSide * (0.06 + params.scale * 0.12) * (0.4 + mood.energy * 1.3)
       * tuning.amplitude;
 
@@ -63,8 +78,10 @@ export class RadialWaveformPrimitive implements DrawPrimitive {
     ctx.lineJoin = 'round';
 
     const rings = Math.max(1, Math.round(tuning.rings * (0.5 + params.density * 0.75)));
+    const outward = Math.min(1, frame.hole * 6);
     for (let ring = 0; ring < rings; ring++) {
-      const ringScale = 1 + ring * 0.22;
+      // Под обложкой кольца плотнее: иначе вся конструкция упирается в текст песни.
+      const ringScale = 1 + ring * 0.22 * (1 - outward * 0.5);
       const fade = 1 - ring / (rings + 0.6);
       ctx.strokeStyle = palette.accentAlpha(0.2 + ring * 0.3, (0.16 + mood.energy * 0.4) * fade * weight);
 
@@ -77,7 +94,8 @@ export class RadialWaveformPrimitive implements DrawPrimitive {
           const index = Math.floor((mirror ? 1 - local : local) * (perSector - 1));
           const value = this.samples[(index + ring * 17) % SAMPLES];
           const angle = this.spin + ray * sector + local * sector;
-          const radius = inner * ringScale + value * amplitude;
+          // Под обложкой волна идёт только наружу: внутрь ей некуда.
+      const radius = inner * ringScale + (value + (Math.abs(value) - value) * outward) * amplitude;
           const x = cx + Math.cos(angle) * radius;
           const y = cy + Math.sin(angle) * radius;
           if (ray === 0 && i === 0) ctx.moveTo(x, y);
@@ -87,7 +105,43 @@ export class RadialWaveformPrimitive implements DrawPrimitive {
       ctx.closePath();
       ctx.stroke();
     }
+
+    if (tuning.eq > 0.01) {
+      const base = inner * (1 + (rings - 1) * 0.22 * (1 - outward * 0.5)) + amplitude * 0.3 + minSide * 0.015;
+      this.drawEqualizer(frame, cx, cy, base, minSide * 0.13 * tuning.eq);
+    }
     ctx.restore();
+  }
+
+  private drawEqualizer(frame: RenderFrame, cx: number, cy: number, base: number, reach: number): void {
+    const { ctx, mood, palette, weight } = frame;
+    this.bands.update(mood.spectrum, mood.binHz, EQ_BARS, frame.dtMs / 1000, mood.energy);
+    const values = this.bands.values;
+    const step = Math.PI / EQ_BARS;
+    ctx.lineCap = 'butt';
+    ctx.lineWidth = Math.max(1.5, base * step * 0.55);
+    const body = (0.28 + mood.energy * 0.3) * weight;
+    for (let k = 0; k < EQ_BARS; k++) {
+      const value = values[k];
+      if (value < 0.02) continue;
+      const length = value * reach;
+      const t = k / EQ_BARS;
+      const colour = this.rainbow
+        ? `hsl(${(t * 300).toFixed(0)} 90% ${(55 + value * 25).toFixed(0)}% / ${body.toFixed(3)})`
+        : palette.accentAlpha(0.15 + t * 0.75, body);
+      ctx.strokeStyle = colour;
+      // Низ частот сверху, дальше по обе стороны вниз.
+      const angle = -Math.PI / 2 + (k + 0.5) * step;
+      ctx.beginPath();
+      for (let side = 0; side < 2; side++) {
+        const a = side === 0 ? angle : Math.PI - angle;
+        const cos = Math.cos(a);
+        const sin = Math.sin(a);
+        ctx.moveTo(cx + cos * base, cy + sin * base);
+        ctx.lineTo(cx + cos * (base + length), cy + sin * (base + length));
+      }
+      ctx.stroke();
+    }
   }
 
   private sample(waveform: Float32Array, gain: number): void {

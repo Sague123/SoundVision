@@ -322,6 +322,12 @@ export interface SceneConfig {
   echo: number;
   /** Призраки прошлых ударов. */
   ghosts: boolean;
+  /**
+   * Разброс точки удара вокруг центра, множитель. 1 — удары приходят
+   * «отовсюду»; под режиссёром меньше: кадр построен вокруг одной фигуры, и
+   * кольца в случайных углах читаются как пузыри, а не как удар.
+   */
+  impactSpread: number;
   /** Блики на пиковых ударах. */
   flare: boolean;
   /**
@@ -355,6 +361,7 @@ export function defaultSceneConfig(): SceneConfig {
     smear: 0.6,
     echo: 0.5,
     ghosts: true,
+    impactSpread: 1,
     flare: true,
     budget: 2.4,
     motion: 1,
@@ -541,7 +548,7 @@ export class Scene {
     const scaled = strength * intensity;
     // Точка удара смещается от центра тем сильнее, чем громче: тихие удары
     // приходят «отовсюду», громкие имеют явный источник.
-    const spread = 0.12 + scaled * 0.3;
+    const spread = (0.12 + scaled * 0.3) * this.config.impactSpread;
     const x = 0.5 + (this.rng() * 2 - 1) * spread;
     const y = 0.5 + (this.rng() * 2 - 1) * spread;
 

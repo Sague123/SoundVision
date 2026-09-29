@@ -272,6 +272,11 @@ export interface Settings {
     cardCorner: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
     /** Сколько карточка держится в режиме «на смену трека», секунд. */
     cardHoldSec: number;
+    /**
+     * Обложка и название в центре кадра, когда сцена строит кадр вокруг
+     * центра. На это время угловая карточка уходит.
+     */
+    centerpiece: boolean;
   };
   lyrics: {
     enabled: boolean;
@@ -299,7 +304,7 @@ export const MAX_SAFE_FLASH_HZ = 3;
 
 /** Примитивы, которые рисуют сам сигнал, а не абстракцию рядом с ним. */
 export const AUDIO_PRIMITIVE_IDS: PrimitiveId[] = [
-  'waveform-terrain', 'wave-mesh', 'spectrum', 'radial-waveform', 'oscilloscope',
+  'waveform-ribbon', 'waveform-terrain', 'wave-mesh', 'spectrum', 'radial-waveform', 'oscilloscope',
 ];
 
 function defaultPrimitives(): Record<PrimitiveId, PrimitiveSettings> {
@@ -441,6 +446,7 @@ export function defaultSettings(): Settings {
       progressLine: true,
       cardCorner: 'top-left',
       cardHoldSec: 8,
+      centerpiece: true,
     },
     lyrics: {
       enabled: true,
@@ -478,7 +484,7 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.deformation.amount = 0.45;
       // Живой звук: широкий штрих, глубокий ландшафт, длинное послесвечение —
       // картинка должна держать удар, а не рассыпаться на мелкую сетку.
-      s.primitives['waveform-terrain'].params.depth = 150;
+      s.primitives['waveform-terrain'].params.depth = 72;
       s.primitives['waveform-terrain'].params.verticalGain = 1.3;
       s.primitives['waveform-terrain'].params.lineWidth = 1.4;
       s.primitives.oscilloscope.params.persistence = 0.75;
@@ -550,9 +556,8 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.light.rays = 0.08;
       // Сам сигнал и ничего вокруг: глубокая история, сильное отражение,
       // заметный «дождь» от гребней.
-      s.primitives['waveform-terrain'].params.depth = 170;
-      s.primitives['waveform-terrain'].params.reflection = 0.85;
-      s.primitives['waveform-terrain'].params.rain = 0.75;
+      s.primitives['waveform-terrain'].params.depth = 80;
+      s.primitives['waveform-terrain'].params.flow = 1.3;
       s.primitives['waveform-terrain'].params.perspective = 0.6;
       s.primitives.oscilloscope.params.gain = 1.25;
       s.primitives['radial-waveform'].params.rings = 3;
@@ -582,7 +587,7 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       }
       // Меньше линий — каждая видна отдельно, а не сливается с соседней.
       s.primitives['wave-mesh'].params.lines = 70;
-      s.primitives['waveform-terrain'].params.depth = 70;
+      s.primitives['waveform-terrain'].params.depth = 40;
       s.primitives.spectrum.params.gap = 0.7;
     },
   },
@@ -640,8 +645,8 @@ export const PRESET_PROFILES: Array<{ id: string; name: string; apply: (settings
       s.primitives['wave-mesh'].params.lines = 60;
       s.primitives['wave-mesh'].params.flow = 0.5;
       s.primitives['wave-mesh'].params.amplitude = 0.7;
-      s.primitives['waveform-terrain'].params.depth = 60;
-      s.primitives['waveform-terrain'].params.rain = 0.2;
+      s.primitives['waveform-terrain'].params.depth = 32;
+      s.primitives['waveform-terrain'].params.flow = 0.7;
       s.primitives.spectrum.params.glitch = 0;
       s.primitives.spectrum.params.barHeight = 0.6;
       s.primitives.oscilloscope.params.persistence = 0.8;

@@ -796,7 +796,13 @@ export class SettingsPanel {
         get: () => s.cover.progressLine, set: (v) => { s.cover.progressLine = v; },
         def: d.cover.progressLine,
       })),
-      note('Если текст песни внизу, карточка сама уходит наверх.'),
+      this.track(toggle({
+        label: 'Обложка в центре кадра',
+        get: () => s.cover.centerpiece, set: (v) => { s.cover.centerpiece = v; },
+        def: d.cover.centerpiece,
+      })),
+      note('Если текст песни внизу, карточка сама уходит наверх. Обложка в '
+        + 'центре появляется на сценах с кольцом; при тексте песни по центру её нет.'),
     ]);
 
     this.addSection('Что сейчас играет', () => [

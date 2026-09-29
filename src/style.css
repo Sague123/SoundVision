@@ -407,11 +407,19 @@ body.idle {
 .now-playing--bottom-left { bottom: 26px; left: 30px; right: auto; top: auto; }
 .now-playing--bottom-right { bottom: 26px; right: 30px; left: auto; top: auto; }
 
-/* Уход: растворение со сдвигом влево — обратное появлению. */
-.now-playing--hidden {
+/*
+ * Уход: растворение со сдвигом влево — обратное появлению.
+ *
+ * `animation: none` обязателен: анимация входа идёт с fill-mode both, а
+ * значения анимации сильнее обычных правил — без сброса её конечный кадр
+ * держал opacity 1, и карточка «при смене трека» не уходила никогда.
+ * Двойной класс — чтобы правило `--enter` ниже по файлу его не перебило.
+ */
+.now-playing.now-playing--hidden {
   opacity: 0;
   transform: translateX(-24px);
   pointer-events: none;
+  animation: none;
 }
 
 
@@ -506,6 +514,88 @@ body.idle {
 
 .now-playing--compact .now-playing__artist {
   font-size: 10px;
+}
+
+/* --- Обложка в центре кадра ---
+ * Размеры приходят из JS (доли меньшей стороны сцены): круг обложки обязан
+ * совпасть с пустым кругом, который держит рендер. Верх блока стоит так,
+ * чтобы центр диска был чуть выше центра сцены — под ним ещё две строки. */
+.centerpiece {
+  position: absolute;
+  top: 50%;
+  left: calc((100% - var(--panel-width)) / 2);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: var(--cp-text, 220px);
+  pointer-events: none;
+  transform: translate(-50%, calc(var(--cp-disc, 140px) / -2 - var(--cp-lift, 28px)))
+    scale(var(--cp-enter, 1));
+  transform-origin: 50% calc(var(--cp-disc, 140px) / 2);
+  transition: left 0.28s ease;
+}
+
+.centerpiece__disc {
+  position: relative;
+  width: var(--cp-disc, 140px);
+  height: var(--cp-disc, 140px);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.1), rgba(8, 10, 14, 0.92) 70%);
+  box-shadow: 0 0 calc(var(--cp-disc, 140px) * 0.35) rgba(255, 255, 255, 0.08),
+    0 0 0 calc(var(--cp-disc, 140px) * 0.03) rgba(0, 0, 0, 0.35);
+  transform: scale(var(--cp-pulse, 1));
+  transition: transform 90ms ease-out;
+}
+
+.centerpiece__cover {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.centerpiece__monogram {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: calc(var(--cp-disc, 140px) * 0.3);
+  font-weight: 300;
+  letter-spacing: 0.06em;
+}
+
+.centerpiece__title {
+  max-width: 100%;
+  margin-top: calc(var(--cp-min, 720px) * 0.02);
+  overflow: hidden;
+  color: #fff;
+  font-size: calc(var(--cp-min, 720px) * 0.031);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.85);
+  white-space: nowrap;
+}
+
+.centerpiece__artist {
+  max-width: 100%;
+  margin-top: 0.35em;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: calc(var(--cp-min, 720px) * 0.019);
+  font-variant-caps: all-small-caps;
+  letter-spacing: 0.12em;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.85);
+  white-space: nowrap;
 }
 
 /* Прогресс трека тонкой линией по нижней кромке экрана. */

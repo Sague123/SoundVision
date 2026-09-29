@@ -1,185 +1,209 @@
-import { mulberry32, type GeneratorSeed } from '../seed.ts';
+import type { GeneratorSeed } from '../seed.ts';
+import { SpectrumBands } from './spectrum-bands.ts';
 import type { DrawPrimitive, RenderFrame } from './types.ts';
 import { WaveformGain } from './waveform-gain.ts';
 
 /**
- * Ландшафт из истории осциллограммы.
+ * Ландшафт из истории спектра в настоящей перспективе.
  *
- * Каждый кадр волны остаётся в кольцевом буфере и на следующих кадрах уходит
- * вглубь: поднимается, сжимается и гаснет. Совпавшие гребни соседних кадров
- * складываются аддитивно и дают яркий хребет — именно так набирается яркость
- * в референсе, наложением линий, а не заливкой площади.
+ * Каждые несколько десятков миллисекунд спектр ложится новым хребтом у края
+ * кадра и уходит вдаль к горизонту. Бас — гора в середине, верха — к краям,
+ * у самых краёв хребты гаснут в равнину: так ландшафт читается как горная
+ * гряда, а не как ровная гребёнка.
  *
- * Снизу то же самое отражается с меньшей непрозрачностью — «отражение в воде».
+ * Поверх спектра в хребет подмешана огибающая текущей волны: спектр за
+ * десятки миллисекунд меняется мало, и без неё строки стояли бы одинаковыми
+ * куполами. С ней каждый хребет — свой пульс, как на старом осциллографе.
+ *
+ * Ближние хребты закрывают дальние (как на обложке «Unknown Pleasures»):
+ * под каждой линией стирается всё, что нарисовано за ней. Без этого
+ * полсотни аддитивных линий сливались в светящуюся кашу, и никакой глубины
+ * не было. Передний хребет — с белой сердцевиной: на нём вся яркость кадра.
+ *
+ * Строки двигаются плавно, долей шага, а не прыжком на новую строку:
+ * иначе весь ландшафт дёргался бы с частотой добавления строк.
  */
 
-/** Сколько кадров волны держим в истории. */
-const MAX_HISTORY = 190;
-/** Сколько точек берём с каждой осциллограммы. */
-const SAMPLES = 220;
+const MAX_ROWS = 96;
+/** Полос спектра на половину ширины; ландшафт зеркален от центра. */
+const BANDS = 40;
+const COLUMNS = BANDS * 2;
+/** Как далеко уходит последний хребет, в единицах ближнего. */
+const FAR_Z = 8;
+/** Доля огибающей волны в высоте хребта. */
+const PULSE_SHARE = 0.35;
 
 export class WaveformTerrainPrimitive implements DrawPrimitive {
   readonly id = 'waveform-terrain' as const;
   readonly kind = 'draw' as const;
 
-  /** История волн: MAX_HISTORY строк по SAMPLES значений. */
-  private history = new Float32Array(MAX_HISTORY * SAMPLES);
+  private readonly bands = new SpectrumBands(BANDS);
+  private readonly autoGain = new WaveformGain();
+  /** Огибающая волны по колонкам на текущий кадр. */
+  private readonly pulse = new Float32Array(COLUMNS);
+  /** История хребтов: MAX_ROWS строк по COLUMNS высот, кольцевой буфер. */
+  private readonly history = new Float32Array(MAX_ROWS * COLUMNS);
+  private readonly window = new Float32Array(COLUMNS);
+  private readonly xs = new Float32Array(COLUMNS);
+  private readonly ys = new Float32Array(COLUMNS);
   private writeIndex = 0;
   private filled = 0;
+  /** Доля пути до следующей строки, 0..1. */
+  private progress = 0;
   private width = 1;
   private height = 1;
-  private rng = mulberry32(1);
-  /** Смещение фазы «дождя»: вертикальных штрихов от гребней. */
-  private rainPhase = 0;
-  private readonly autoGain = new WaveformGain();
+
+  constructor() {
+    for (let c = 0; c < COLUMNS; c++) {
+      const u = c / (COLUMNS - 1);
+      // Края — равнина, середина — горы.
+      this.window[c] = 0.08 + 0.92 * Math.pow(Math.sin(Math.PI * u), 1.4);
+    }
+  }
 
   resize(width: number, height: number): void {
     this.width = width;
     this.height = height;
   }
 
-  reseed(seed: GeneratorSeed): void {
-    this.rng = mulberry32(seed.seed ^ 0x1b873593);
-    this.rainPhase = this.rng();
-    this.history = new Float32Array(MAX_HISTORY * SAMPLES);
+  reseed(_seed: GeneratorSeed): void {
+    this.history.fill(0);
+    this.bands.reset();
     this.writeIndex = 0;
     this.filled = 0;
+    this.progress = 0;
   }
 
   dispose(): void {}
 
   draw(frame: RenderFrame): void {
     const { ctx, mood, params, palette, weight, tuning } = frame;
-    this.push(mood.waveform, this.autoGain.update(mood.waveform, frame.dtMs / 1000));
+    const dt = frame.dtMs / 1000;
+    this.bands.update(mood.spectrum, mood.binHz, BANDS, dt, mood.energy);
+    this.samplePulse(mood.waveform, this.autoGain.update(mood.waveform, dt));
 
-    // Глубина задаётся параметром напрямую, плотность лишь поджимает её:
-    // «сколько кадров видно» — это решение пользователя, а не настроения.
-    const depth = Math.max(12, Math.round(tuning.depth * (0.5 + params.density * 0.5)));
-    const rows = Math.min(this.filled, depth);
+    // Скорость полёта: быстрее на подъёме и с ручкой «скорость».
+    const rowMs = 70 / Math.max(0.2, tuning.flow * (0.7 + params.speed * 0.6));
+    this.progress += frame.dtMs / rowMs;
+    // Больше двух строк за кадр не добавляем: после паузы вкладки не
+    // заливаем историю одинаковыми хребтами.
+    let pushes = 0;
+    while (this.progress >= 1 && pushes < 2) {
+      this.progress -= 1;
+      this.push();
+      pushes++;
+    }
+    if (this.progress >= 1) this.progress = 0;
+
+    const rows = Math.min(this.filled, Math.max(8, Math.min(MAX_ROWS, Math.round(tuning.depth))));
     if (rows < 2) return;
 
-    // Горизонт держим ниже середины: над ним остаётся воздух, под ним отражение.
-    const horizon = this.height * 0.52;
-    const gain = this.height * (0.1 + params.scale * 0.22) * (0.5 + mood.energy * 1.1)
-      * tuning.verticalGain;
-    const step = (horizon * 0.82 * (0.4 + tuning.perspective * 1.2)) / rows;
-
-    /**
-     * Общая «краска» кадра не должна зависеть от глубины: сто аддитивных
-     * линий в два пикселя друг от друга сливаются в заливку, а референс
-     * держится на том, что линии видно по отдельности. Поэтому непрозрачность
-     * делится на число строк, и глубина меняет детализацию, а не яркость.
-     */
-    const bulkInk = Math.min(1, 26 / rows);
+    const horizon = this.height * (0.44 - tuning.perspective * 0.14);
+    // Масштаб проекции: основание ближнего хребта — у нижней кромки.
+    const scale = this.height * 0.97 - horizon;
+    const cx = this.width / 2;
+    // Ближний хребет шире кадра: края гряды уходят за рамку.
+    const halfWorld = (this.width * 0.62) / scale;
+    const amplitude = tuning.verticalGain * (0.3 + params.scale * 0.35) * (0.55 + mood.energy * 0.7);
+    const dz = (FAR_Z - 1) / rows;
+    const occlusion = Math.min(1, tuning.occlusion) * weight;
+    const lineScale = tuning.lineWidth * (0.8 + params.sharpness * 0.5);
 
     ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
 
-    // Дальние кадры рисуем первыми: ближние должны ложиться поверх.
-    for (let row = rows - 1; row >= 0; row--) {
-      const age = row / rows;
-      // Перспектива: чем дальше кадр, тем выше, у́же и тусклее.
-      const y = horizon - age * step * rows;
-      const shrink = 1 - age * 0.42 * (0.4 + tuning.perspective * 1.2);
-      const fade = (1 - age) ** 1.6;
-      const amplitude = gain * shrink * (1 - age * 0.35);
+    // Дальние первыми: ближние стирают их под собой и ложатся сверху.
+    for (let k = rows - 1; k >= 0; k--) {
+      const z = 1 + (k + this.progress) * dz;
+      const age = (k + this.progress) / rows;
+      const inv = 1 / z;
+      const base = horizon + scale * inv;
+      const offset = ((this.writeIndex - 1 - k + MAX_ROWS * 2) % MAX_ROWS) * COLUMNS;
 
-      const offset = ((this.writeIndex - 1 - row + MAX_HISTORY) % MAX_HISTORY) * SAMPLES;
-      const tone = 0.15 + age * 0.7;
+      for (let c = 0; c < COLUMNS; c++) {
+        const u = c / (COLUMNS - 1);
+        this.xs[c] = cx + (u * 2 - 1) * halfWorld * scale * inv;
+        this.ys[c] = base - this.history[offset + c] * amplitude * scale * inv;
+      }
 
-      /*
-       * Делить непрозрачность поровну между всеми строками нельзя: получается
-       * ровное тусклое поле без единой яркой точки, а гистограмма — один горб
-       * в тенях. В референсе передний гребень почти белый, а вглубь всё
-       * быстро гаснет. Поэтому ближние строки идут почти на полной яркости, и
-       * только хвост уходит в общую «краску».
-       */
-      const ink = bulkInk + (1 - bulkInk) * fade ** 5;
+      // Туман: вдаль линии гаснут; новая строка проявляется, пока встаёт на место.
+      const fog = Math.pow(1 - age, 1.5);
+      const enter = k === 0 ? Math.min(1, this.progress * 3) : 1;
+      if (fog * enter < 0.01) continue;
 
-      ctx.lineWidth = Math.max(1, (1.2 - age) * (0.8 + params.sharpness * 0.6) * tuning.lineWidth);
-      ctx.strokeStyle = palette.accentAlpha(tone, (0.1 + mood.energy * 0.35) * fade * weight * ink);
-      this.strokeRow(ctx, offset, y, amplitude, shrink, false);
+      if (occlusion > 0.01) {
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = `rgba(0,0,0,${occlusion.toFixed(3)})`;
+        this.tracePath(ctx);
+        ctx.lineTo(this.xs[COLUMNS - 1], base + 2);
+        ctx.lineTo(this.xs[0], base + 2);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      ctx.globalCompositeOperation = 'lighter';
+      const near = 1 - age;
+      this.tracePath(ctx);
+      ctx.lineWidth = Math.max(1, (0.8 + near * 1.6) * lineScale);
+      ctx.strokeStyle = palette.accentAlpha(0.15 + age * 0.7,
+        (0.22 + mood.energy * 0.45) * fog * enter * weight);
       ctx.stroke();
 
-      // Отражение: слабее и ниже горизонта, даёт «воду» из референса.
-      const reflection = tuning.reflection * params.trail;
-      if (reflection > 0.08) {
-        ctx.strokeStyle = palette.accentAlpha(tone, (0.05 + mood.energy * 0.14) * fade * weight * reflection * ink);
-        this.strokeRow(ctx, offset, horizon + (horizon - y) * 0.75, amplitude * 0.8, shrink, true);
+      // Передний хребет: ореол и белая сердцевина.
+      if (k <= 1) {
+        const front = (k === 0 ? enter : 1 - this.progress) * weight;
+        ctx.lineWidth = Math.max(2, 7 * lineScale * (0.6 + mood.energy * 0.4));
+        ctx.strokeStyle = palette.accentAlpha(0.3, 0.22 * front);
+        ctx.stroke();
+        ctx.lineWidth = Math.max(1, 1.5 * lineScale);
+        ctx.strokeStyle = `rgba(255,255,255,${Math.min(1, 0.9 * front).toFixed(3)})`;
         ctx.stroke();
       }
     }
-
-    this.drawRain(frame, horizon, gain);
     ctx.restore();
   }
 
-  /** Одна ломаная по ширине экрана. */
-  private strokeRow(
-    ctx: CanvasRenderingContext2D,
-    offset: number,
-    y: number,
-    amplitude: number,
-    shrink: number,
-    mirrored: boolean,
-  ): void {
-    const inset = (this.width * (1 - shrink)) / 2;
-    const span = this.width * shrink;
-    const direction = mirrored ? -1 : 1;
-
+  /** Сглаженная кривая по точкам хребта: середины отрезков — узлы, точки — опоры. */
+  private tracePath(ctx: CanvasRenderingContext2D): void {
+    const xs = this.xs;
+    const ys = this.ys;
     ctx.beginPath();
-    for (let i = 0; i < SAMPLES; i++) {
-      const x = inset + (i / (SAMPLES - 1)) * span;
-      const value = this.history[offset + i];
-      const py = y - value * amplitude * direction;
-      if (i === 0) ctx.moveTo(x, py);
-      else ctx.lineTo(x, py);
+    ctx.moveTo(xs[0], ys[0]);
+    for (let c = 1; c < COLUMNS - 1; c++) {
+      ctx.quadraticCurveTo(xs[c], ys[c], (xs[c] + xs[c + 1]) / 2, (ys[c] + ys[c + 1]) / 2);
     }
+    ctx.lineTo(xs[COLUMNS - 1], ys[COLUMNS - 1]);
   }
 
-  /**
-   * Вертикальные штрихи от пиков вверх. Мелкая деталь из референса: она
-   * читается только в нативном разрешении и даёт текстуру над ландшафтом.
-   */
-  private drawRain(frame: RenderFrame, horizon: number, gain: number): void {
-    const { ctx, params, mood, palette, weight, tuning } = frame;
-    const density = Math.round(SAMPLES * (0.05 + params.density * 0.25) * tuning.rain * 2);
-    if (density <= 0) return;
-
-    const offset = ((this.writeIndex - 1 + MAX_HISTORY) % MAX_HISTORY) * SAMPLES;
-    ctx.lineWidth = tuning.lineWidth;
-    ctx.strokeStyle = palette.accentAlpha(0.95, (0.08 + mood.energy * 0.22) * weight);
-    ctx.beginPath();
-    for (let i = 0; i < density; i++) {
-      // Шаг выбран простым перебором с фазой от seed: штрихи не должны
-      // выстраиваться в регулярную гребёнку.
-      const index = Math.floor((i * 7.3 + this.rainPhase * SAMPLES)) % SAMPLES;
-      const value = Math.abs(this.history[offset + index]);
-      if (value < 0.04) continue;
-      const x = (index / (SAMPLES - 1)) * this.width;
-      const top = horizon - value * gain * (1.2 + mood.energy);
-      ctx.moveTo(x, horizon - value * gain * 0.9);
-      ctx.lineTo(x, top);
-    }
-    ctx.stroke();
-  }
-
-  /** Осциллограмма прореживается до SAMPLES точек по максимуму модуля. */
-  private push(waveform: Float32Array, gain: number): void {
-    const offset = this.writeIndex * SAMPLES;
-    const stride = Math.max(1, Math.floor(waveform.length / SAMPLES));
-    for (let i = 0; i < SAMPLES; i++) {
+  /** Огибающая волны: пик модуля на отрезок, приведённый автоусилением к ~0.6. */
+  private samplePulse(wave: Float32Array, gain: number): void {
+    const stride = Math.max(1, Math.floor(wave.length / COLUMNS));
+    for (let c = 0; c < COLUMNS; c++) {
       let peak = 0;
-      const start = i * stride;
+      const start = c * stride;
       for (let j = 0; j < stride; j++) {
-        const value = waveform[start + j] ?? 0;
-        if (Math.abs(value) > Math.abs(peak)) peak = value;
+        const v = wave[start + j] ?? 0;
+        const a = v < 0 ? -v : v;
+        if (a > peak) peak = a;
       }
-      this.history[offset + i] = peak * gain;
+      this.pulse[c] = Math.min(1, peak * gain * 1.3);
     }
-    this.writeIndex = (this.writeIndex + 1) % MAX_HISTORY;
-    this.filled = Math.min(MAX_HISTORY, this.filled + 1);
+  }
+
+  /** Новый хребет: текущий спектр, зеркально от центра, со сглаживанием соседей. */
+  private push(): void {
+    const offset = this.writeIndex * COLUMNS;
+    const values = this.bands.values;
+    for (let c = 0; c < COLUMNS; c++) {
+      const band = c < BANDS ? BANDS - 1 - c : c - BANDS;
+      const left = values[Math.max(0, band - 1)];
+      const right = values[Math.min(BANDS - 1, band + 1)];
+      const smooth = values[band] * 0.5 + (left + right) * 0.25;
+      const height = smooth * (1 - PULSE_SHARE) + this.pulse[c] * PULSE_SHARE;
+      this.history[offset + c] = height * this.window[c];
+    }
+    this.writeIndex = (this.writeIndex + 1) % MAX_ROWS;
+    this.filled = Math.min(MAX_ROWS, this.filled + 1);
   }
 }

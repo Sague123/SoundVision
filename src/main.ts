@@ -19,6 +19,7 @@ import type { Settings } from './settings.ts';
 import { DebugOverlay } from './ui/debug-overlay.ts';
 import { loadFonts } from './ui/fonts.ts';
 import { LyricsOverlay } from './ui/lyrics-overlay.ts';
+import { Centerpiece } from './ui/centerpiece.ts';
 import { NowPlayingCard } from './ui/now-playing-card.ts';
 import { loadSettings, saveSettings } from './ui/presets.ts';
 import { SettingsPanel } from './ui/settings-panel.ts';
@@ -40,6 +41,7 @@ class App {
   private readonly syncEngine = new SyncEngine();
   private readonly lyricsOverlay = new LyricsOverlay();
   private readonly card = new NowPlayingCard();
+  private readonly centerpiece = new Centerpiece();
   private readonly debugOverlay = new DebugOverlay();
   /** Режиссёр целиком: признаки, состояние, решения, обучение. */
   private readonly director = new DirectorRuntime();
@@ -111,6 +113,7 @@ class App {
 
     this.root.append(
       this.canvas,
+      this.centerpiece.element,
       this.lyricsOverlay.element,
       this.card.element,
       this.card.progressLine,
@@ -205,10 +208,19 @@ class App {
   private renderFrame(mood: MoodVector, live: boolean): void {
     const step = live ? this.director.step(mood, this.settings) : null;
     this.lastStep = step;
+    const track = this.nowPlaying.current();
+    // Обложку в центр решает режиссёр, но только при известном треке, при
+    // включённой настройке и если по центру не стоит текст песни.
+    const lyricsCentred = this.settings.lyrics.enabled && this.settings.lyrics.position === 'center';
+    const centre = track && this.settings.cover.centerpiece && !lyricsCentred
+      ? step?.output?.centerpiece ?? 0
+      : 0;
+    this.compositor.centerpiece = centre;
     const stats = this.compositor.render(mood, this.settings, this.coverLoader.art, step?.output ?? null);
 
-    const track = this.nowPlaying.current();
-    this.card.update(track, this.settings, mood.timeMs);
+    const pulse = step ? step.features.bass * 0.4 + step.features.transientStrength * 0.6 : 0;
+    this.centerpiece.update(track, centre, pulse);
+    this.card.update(track, this.settings, mood.timeMs, centre > 0.4);
     this.lyricsOverlay.update(
       this.syncEngine.locate(track?.progressMs ?? 0),
       this.settings,
@@ -514,6 +526,7 @@ class App {
     const width = this.canvas.clientWidth || window.innerWidth;
     const height = this.canvas.clientHeight || window.innerHeight;
     this.compositor.resize(width, height);
+    this.centerpiece.resize(width, height);
     if (!this.capture) this.renderIdleFrame();
   }
 }

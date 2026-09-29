@@ -9,6 +9,7 @@ import type { Tuning } from './tuning.ts';
 export const ALL_PRIMITIVE_IDS = [
   // Аудио-примитивы: рисуют сам сигнал, а не абстракцию рядом с ним.
   'wave-grid-3d',
+  'waveform-ribbon',
   'waveform-terrain',
   'wave-mesh',
   'spectrum',
@@ -28,7 +29,8 @@ export type PrimitiveId = (typeof ALL_PRIMITIVE_IDS)[number];
 
 export const PRIMITIVE_LABELS: Record<PrimitiveId, string> = {
   'wave-grid-3d': 'Волна над сеткой (3D)',
-  'waveform-terrain': 'Waveform terrain',
+  'waveform-ribbon': 'Лента волны',
+  'waveform-terrain': 'Ландшафт спектра (3D)',
   'wave-mesh': 'Wave mesh',
   spectrum: 'Spectrum + glitch',
   'radial-waveform': 'Radial waveform',
@@ -90,6 +92,12 @@ export interface RenderFrame {
    * Такой примитив обязан домножить свой вклад на `fade`.
    */
   fade: number;
+  /**
+   * Радиус пустого круга в центре, в долях меньшей стороны кадра. Под ним
+   * стоит обложка трека: примитивы, которые рисуют вокруг центра, обязаны
+   * расступиться, а не лезть поверх неё. 0 — центр свободен.
+   */
+  hole: number;
   dtMs: number;
   timeMs: number;
 }

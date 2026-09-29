@@ -191,8 +191,8 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
 {
   // Порядок примитивов по оси вещества: от тумана к плазме.
   const SUBSTANCE_ORDER = [
-    'flow-field', 'waveform-terrain', 'l-system', 'wave-mesh', 'metaballs',
-    'radial-waveform', 'oscilloscope', 'voronoi', 'cellular', 'kaleidoscope',
+    'flow-field', 'wave-grid-3d', 'waveform-terrain', 'l-system', 'wave-mesh', 'metaballs',
+    'waveform-ribbon', 'radial-waveform', 'oscilloscope', 'voronoi', 'cellular', 'kaleidoscope',
     'spectrum', 'raymarch',
   ];
 
@@ -208,7 +208,12 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
    * поэтому прогон обязан содержать смены секции — иначе соло так и останется
    * тем, с которым генератор стартовал.
    */
-  const leaderFor = (quiet: boolean): string => {
+  /**
+   * Средняя позиция соло на оси за прогон. Последний кадр ничего не
+   * доказывает: на каждой смене секции соло обязано смениться, и итог
+   * зависел бы от чётности числа смен, а не от оси.
+   */
+  const leaderFor = (quiet: boolean): { mean: number; names: string } => {
     const generator = new Generator('проверка оси');
     for (let i = 0; i < salt; i++) generator.reshuffle();
 
@@ -217,7 +222,9 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
     const settings = defaultSettings();
     settings.generator.mode = 'auto';
 
-    let solo = '';
+    let sum = 0;
+    let count = 0;
+    const names = new Set<string>();
     for (let frame = 0; frame < 60 * 200; frame++) {
       const timeMs = frame * FRAME_MS;
       // Секция дёргается каждые 25 секунд: даём системе фокуса возможность
@@ -226,16 +233,22 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
       const mood = moodAt(timeMs, quiet
         ? { noisiness: 0.02, brightness: 0.05, energy: 0.12, section: flip ? 'calm' : 'steady' }
         : { noisiness: 0.95, brightness: 0.9, energy: 0.9, section: flip ? 'drop' : 'buildup' });
-      solo = generator.update(mood, settings, scene.update(mood, SCENE_CONFIG)).focus.solo;
+      const solo = generator.update(mood, settings, scene.update(mood, SCENE_CONFIG)).focus.solo;
+      if (solo) {
+        sum += SUBSTANCE_ORDER.indexOf(solo);
+        count++;
+        names.add(solo);
+      }
     }
-    return solo;
+    return { mean: count ? sum / count : -1, names: [...names].join('/') };
   };
 
   const quietLeader = leaderFor(true);
   const loudLeader = leaderFor(false);
   check('в тишине соло уходит к «туманному» краю оси',
-    SUBSTANCE_ORDER.indexOf(quietLeader) < SUBSTANCE_ORDER.indexOf(loudLeader),
-    `тишина ${quietLeader}, пик ${loudLeader}`);
+    quietLeader.mean >= 0 && quietLeader.mean < loudLeader.mean,
+    `тишина ${quietLeader.names} (${quietLeader.mean.toFixed(1)}), `
+      + `пик ${loudLeader.names} (${loudLeader.mean.toFixed(1)})`);
 }
 
 // --- 6. Классификация удара по частотному профилю ----------------------------
