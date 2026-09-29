@@ -127,7 +127,8 @@ body.idle {
   background: #e0a040;
 }
 
-.start__status[data-state='waiting']::before {
+.start__status[data-state='waiting']::before,
+.start__status[data-state='native']::before {
   background: var(--ui-accent);
   animation: start-pulse 1.6s ease-in-out infinite;
 }

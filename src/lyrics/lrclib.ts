@@ -44,9 +44,56 @@ export async function fetchLyrics(
 ): Promise<Lyrics | null> {
   if (!artist && !title) return null;
 
-  const exact = await requestGet(artist, title, durationMs, signal);
-  if (exact) return exact;
-  return requestSearch(artist, title, signal);
+  // Названия из YouTube и системного «Сейчас играет» часто приходят с
+  // хвостами: «(Official Video)», «feat. …», канал «… - Topic». С ними lrclib
+  // ничего не находит, поэтому пробуем по очереди несколько вариантов.
+  for (const [a, t] of candidates(artist, title)) {
+    if (signal?.aborted) return null;
+    const exact = await requestGet(a, t, durationMs, signal);
+    if (exact) return exact;
+    const found = await requestSearch(a, t, signal);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Варианты «артист — название» от точного к очищенному, без повторов. */
+export function candidates(artist: string, title: string): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  const push = (a: string, t: string): void => {
+    const pair: [string, string] = [a.trim(), t.trim()];
+    if (!pair[1]) return;
+    if (!out.some(([x, y]) => x.toLowerCase() === pair[0].toLowerCase() && y.toLowerCase() === pair[1].toLowerCase())) {
+      out.push(pair);
+    }
+  };
+  push(artist, title);
+  const cleanArtist = cleanArtistName(artist);
+  const cleanTitle = cleanTrackTitle(title);
+  push(cleanArtist, cleanTitle);
+  // «Артист - Название» в заголовке ролика: артист в поле — это канал.
+  const dash = cleanTitle.match(/^(.+?)\s+[-–—]\s+(.+)$/);
+  if (dash) push(dash[1], dash[2]);
+  return out;
+}
+
+function cleanArtistName(artist: string): string {
+  return artist
+    .replace(/\s*-\s*Topic$/i, '')
+    .replace(/VEVO$/i, '')
+    .split(/\s*(?:,|&| feat\.? | ft\.? | x )\s*/i)[0]
+    .trim();
+}
+
+function cleanTrackTitle(title: string): string {
+  return title
+    // Скобки с пометками версии ролика.
+    .replace(/\s*[([][^)\]]*(official|video|audio|lyric|visuali[sz]er|clip|remaster|hd|4k|mv|премьера|клип)[^)\]]*[)\]]/gi, '')
+    // Приглашённые артисты — в хвосте названия.
+    // Граница слова обязательна: без неё «ft» находилось внутри «Daft Punk».
+    .replace(/\s*[([]?\s*\b(feat\.?|ft\.?|featuring)\s+[^)\]]*[)\]]?/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 async function requestGet(

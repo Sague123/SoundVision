@@ -16,6 +16,7 @@ const SOURCE_LABELS: Record<NowPlayingTrack['source'], string> = {
   spotify: 'Spotify',
   'youtube-music': 'YouTube Music',
   manual: 'Вручную',
+  system: 'Windows',
 };
 
 export class NowPlayingCard {

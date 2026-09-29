@@ -26,6 +26,7 @@ import { exportPresets } from '../src/ui/presets.ts';
 import { makeSeed } from '../src/render/seed.ts';
 import { ContourBuilder } from '../src/render/contour.ts';
 import { BridgeAudioInput, encodeBridgeFrame } from '../src/audio/bridge-audio.ts';
+import { candidates } from '../src/lyrics/lrclib.ts';
 import type { NoteName } from '../src/audio/chroma.ts';
 import type { BandProfile } from '../src/audio/features.ts';
 
@@ -1017,6 +1018,26 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
   input.analyser.getFloatFrequencyData(db);
   check('чужие кадры отбрасываются, без кадров — тишина', junk && !input.live && peak(l) === 0 && db[43] === -100,
     `live ${input.live}, пик ${peak(l)}`);
+}
+
+// --- Поиск текста песни по «грязным» названиям --------------------------------
+{
+  /**
+   * Названия из YouTube и «Сейчас играет» Windows приходят с хвостами — с
+   * ними lrclib ничего не находит. Очищенный вариант обязан быть среди
+   * запросов, а исходный — идти первым.
+   */
+  const has = (list: Array<[string, string]>, a: string, t: string) =>
+    list.some(([x, y]) => x === a && y === t);
+  const video = candidates('Linkin Park', 'Numb (Official Music Video)');
+  const topic = candidates('Imagine Dragons - Topic', 'Believer [Official Audio]');
+  const feat = candidates('Eminem', 'Lose Yourself (feat. Someone)');
+  const channel = candidates('SomeChannel', 'Daft Punk - Get Lucky (Official Video)');
+  check('названия чистятся для поиска текста',
+    video[0][1] === 'Numb (Official Music Video)' && has(video, 'Linkin Park', 'Numb')
+      && has(topic, 'Imagine Dragons', 'Believer') && has(feat, 'Eminem', 'Lose Yourself')
+      && has(channel, 'Daft Punk', 'Get Lucky'),
+    `${video.length + topic.length + feat.length + channel.length} вариантов`);
 }
 
 console.log(failures === 0 ? '\nвсё сошлось' : `\nпроблем: ${failures}`);

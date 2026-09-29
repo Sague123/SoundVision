@@ -11,8 +11,11 @@
  * системного звука даёт звук, но не даёт имени, а Spotify и мост по умолчанию
  * выключены. Без имени нет ни обложки, ни карточки, ни текста песни — искать
  * в lrclib нечего.
+ *
+ * `system` — «Сейчас играет» Windows в сборке-exe: название, артист, обложка
+ * и позиция любого плеера, без расширений и мостов.
  */
-export type NowPlayingSource = 'spotify' | 'youtube-music' | 'manual';
+export type NowPlayingSource = 'spotify' | 'youtube-music' | 'manual' | 'system';
 
 export interface NowPlayingTrack {
   title: string;
@@ -60,7 +63,10 @@ export class NowPlaying {
     if (!track) return null;
     if (!track.isPlaying) return track;
     const elapsed = nowMs - track.receivedAt;
-    return { ...track, progressMs: Math.min(track.durationMs, track.progressMs + elapsed) };
+    const progress = track.progressMs + elapsed;
+    // Длительность неизвестна (0) — не обрезаем: иначе позиция стояла бы на
+    // нуле, и текст песни не шёл бы вовсе.
+    return { ...track, progressMs: track.durationMs > 0 ? Math.min(track.durationMs, progress) : progress };
   }
 
   /** Активный источник, если он есть, — для индикатора в панели настроек. */

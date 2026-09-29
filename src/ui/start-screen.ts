@@ -14,7 +14,8 @@ export type BridgeWaitState =
   | 'disabled'      // выключено в настройках
   | 'no-bridge'     // мост не отвечает
   | 'waiting'       // мост есть, звука ещё нет
-  | 'track-no-audio'; // трек из YouTube Music виден, а звук не идёт
+  | 'track-no-audio' // трек из YouTube Music виден, а звук не идёт
+  | 'native';        // сборка-exe: берём звук Windows сами
 
 const BRIDGE_TEXT: Record<BridgeWaitState, string> = {
   disabled: 'Звук из YouTube Music выключен в настройках (клавиша S → «Источники»).',
@@ -22,6 +23,7 @@ const BRIDGE_TEXT: Record<BridgeWaitState, string> = {
   waiting: 'Мост на связи. Включите музыку в YouTube Music — картинка запустится сама.',
   'track-no-audio': 'Трек из YouTube Music виден, а звука нет. Кликните один раз по странице '
     + 'YouTube Music: без клика браузер не даёт расширению подключиться к звуку.',
+  native: 'Берём звук Windows — включите музыку в любом плеере, картинка запустится сама.',
 };
 
 export interface StartScreenHandlers {

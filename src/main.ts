@@ -20,6 +20,7 @@ import type { Settings } from './settings.ts';
 import { DebugOverlay } from './ui/debug-overlay.ts';
 import { loadFonts } from './ui/fonts.ts';
 import { LyricsOverlay } from './ui/lyrics-overlay.ts';
+import { nativeShell, nativeTrack } from './native.ts';
 import { Centerpiece } from './ui/centerpiece.ts';
 import { NowPlayingCard } from './ui/now-playing-card.ts';
 import { loadSettings, saveSettings } from './ui/presets.ts';
@@ -57,6 +58,8 @@ class App {
   private capture: AudioInput | null = null;
   /** Звук из вкладки YouTube Music: кадры приходят через мост. */
   private readonly bridgeAudio = new BridgeAudioInput();
+  /** Оболочка-exe; в браузере её нет. */
+  private readonly native = nativeShell();
   private moodEngine: MoodEngine | null = null;
   private frameHandle = 0;
   /** Время последнего отрисованного кадра — по нему работает лимит fps. */
@@ -164,8 +167,25 @@ class App {
     this.useInput(input);
   }
 
+  /**
+   * Сборка-exe: звук Windows берётся сразу, без окна выбора — оболочка
+   * отвечает на захват системным loopback. Оболочка зовёт это после загрузки
+   * «с жестом пользователя»; если захват сорвался, пробуем ещё раз.
+   */
+  private autoStartNative(): void {
+    if (!this.native || this.capture) return;
+    this.start('system').catch((err: Error) => {
+      this.startScreen.showError(`Не удалось взять звук Windows: ${err.message}`);
+      window.setTimeout(() => this.autoStartNative(), 3000);
+    });
+  }
+
   private updateStartStatus(): void {
     if (!this.startScreen.visible) return;
+    if (this.native) {
+      this.startScreen.setBridgeState('native');
+      return;
+    }
     const { bridge, bridgeAudio } = this.settings.sources;
     if (!bridge || !bridgeAudio) this.startScreen.setBridgeState('disabled');
     else if (this.bridge.state !== 'connected') this.startScreen.setBridgeState('no-bridge');
@@ -205,6 +225,8 @@ class App {
         + 'иначе запустите визуализацию заново.');
     }
     this.renderIdleFrame();
+    // В exe звук Windows не кончается сам по себе — если оборвался, берём снова.
+    if (ended && this.native) window.setTimeout(() => this.autoStartNative(), 1500);
   }
 
   private readonly frame = (timestamp: number): void => {
@@ -321,6 +343,12 @@ class App {
       if (!this.bridgeAudio.push(frame)) return;
       if (this.settings.sources.bridgeAudio && !this.capture) this.useInput(this.bridgeAudio);
     });
+    // Сборка-exe: «Сейчас играет» Windows — трек любого плеера, с обложкой.
+    this.native?.onNowPlaying((message) => this.nowPlaying.update('system', nativeTrack(message)));
+    if (this.native) {
+      (window as unknown as { __soundvisionAutoStart?: () => void }).__soundvisionAutoStart =
+        () => this.autoStartNative();
+    }
 
     this.nowPlaying.onChange((track, changed) => {
       void this.coverLoader.load(track?.coverUrl ?? null);
@@ -359,7 +387,8 @@ class App {
     if (this.settings.sources.spotify && this.spotify.connected) this.spotify.start();
     else this.spotify.stop();
 
-    if (this.settings.sources.bridge) this.bridge.start(this.settings.sources.bridgeUrl);
+    // В exe мост не нужен: трек даёт Windows, звук — системный loopback.
+    if (this.settings.sources.bridge && !this.native) this.bridge.start(this.settings.sources.bridgeUrl);
     else this.bridge.stop();
 
     this.applyManualTrack();

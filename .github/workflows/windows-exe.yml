@@ -1,0 +1,56 @@
+# Сборка SoundVision.exe на Windows.
+#
+# Каждый пуш в ветку собирает portable-exe (один файл, без установки) и
+# кладёт его в релиз «SoundVision для Windows» — оттуда его и качать. Руками
+# сборку можно запустить на вкладке Actions («Run workflow»).
+
+name: Windows exe
+
+on:
+  push:
+    branches: [claude/happy-hopper-uc11a6, main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Проверки
+        run: npm run check
+
+      - name: Сборка exe
+        run: npm run dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SoundVision-windows
+          path: release/*.exe
+          if-no-files-found: error
+
+      - name: Релиз
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-latest-build
+          name: SoundVision для Windows
+          prerelease: true
+          make_latest: false
+          body: |
+            Скачайте SoundVision-*.exe и запустите — установка не нужна.
+            Звук всего компьютера берётся сам, трек и обложка — из «Сейчас играет» Windows.
+            F11 или Esc — выйти из полноэкранного режима, S — настройки.
+            Сборка из коммита ${{ github.sha }}.
+          files: release/*.exe

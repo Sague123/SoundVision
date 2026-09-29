@@ -1,24 +1,58 @@
 {
   "name": "soundvision",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.1.0",
   "type": "module",
   "description": "Audio-reactive generative visualizer for the TV screen",
+  "main": "electron/main.cjs",
+  "author": "SoundVision",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
     "typecheck": "tsc --noEmit",
     "bridge": "tsx bridge-server/server.ts",
-    "check": "tsx dev/scene-check.ts && tsx dev/director-check.ts"
+    "check": "tsx dev/scene-check.ts && tsx dev/director-check.ts",
+    "app": "npm run build && electron .",
+    "dist:win": "npm run build && electron-builder --win portable --x64 --publish never"
   },
   "devDependencies": {
+    "@types/ws": "^8.5.13",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.0.12",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vite": "^6.0.7",
-    "@types/ws": "^8.5.13"
+    "vite": "^6.0.7"
   },
   "dependencies": {
     "ws": "^8.18.0"
+  },
+  "build": {
+    "appId": "app.soundvision.visualizer",
+    "productName": "SoundVision",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json",
+      "!dist/**/*.map"
+    ],
+    "asarUnpack": [
+      "electron/now-playing.ps1"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "SoundVision-${version}.exe"
+    }
   }
 }
