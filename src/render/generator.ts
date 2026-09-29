@@ -216,6 +216,8 @@ export class Generator {
   /** Фокус: ровно одно соло, максимум один акцент. */
   private solo: PrimitiveId = 'flow-field';
   private accent: PrimitiveId | null = null;
+  /** Ведёт ли кадр режиссёр в этом кадре. */
+  private directed = false;
   private background: PrimitiveId | null = null;
   private leaving: PrimitiveId | null = null;
   private soloSince = 0;
@@ -278,20 +280,34 @@ export class Generator {
     return this.seedValue;
   }
 
-  update(mood: MoodVector, settings: Settings, scene: SceneState): GeneratorState {
+  /**
+   * @param directed — веса от режиссёра. Если они есть и пользователь не
+   *   держит соло или ручной список, кадр ведёт режиссёр; собственная
+   *   система фокуса генератора тогда молчит.
+   */
+  update(
+    mood: MoodVector, settings: Settings, scene: SceneState,
+    directed: ReadonlyMap<PrimitiveId, number> | null = null,
+  ): GeneratorState {
     const dt = Math.min(0.1, mood.deltaMs / 1000);
     const morphRate = settings.generator.morphRate * this.seedValue.morphRate;
     // Кроссфейд: чем выше morphRate, тем быстрее веса догоняют цель.
     const k = 1 - Math.exp(-dt * 0.9 * morphRate);
 
-    const targets = this.targetWeights(mood, settings, scene);
+    const director = directed !== null && !settings.generator.solo && settings.generator.mode !== 'manual';
+    this.directed = director;
+    const targets = director ? directed : this.targetWeights(mood, settings, scene);
     for (const id of ALL_PRIMITIVE_IDS) {
       const current = this.weights.get(id) ?? 0;
-      this.weights.set(id, lerp(current, targets.get(id) ?? 0, k));
+      const target = targets.get(id) ?? 0;
+      // Веса режиссёра уже плавные — их ведут жизненные циклы эффектов.
+      // Второй слой сглаживания здесь съедал бы резкие переходы: взрыв в
+      // 200 мс растягивался бы на секунду.
+      this.weights.set(id, director ? (settings.primitives[id]?.enabled === false ? 0 : target) : lerp(current, target, k));
     }
 
     const kaleidoscopeTarget = targets.get('kaleidoscope') ?? 0;
-    this.kaleidoscope = lerp(this.kaleidoscope, kaleidoscopeTarget, k);
+    this.kaleidoscope = director ? kaleidoscopeTarget : lerp(this.kaleidoscope, kaleidoscopeTarget, k);
 
     this.updateBase(mood, settings, scene, k);
 
@@ -556,8 +572,9 @@ export class Generator {
     }
 
     // Базовый слой — атмосфера, а не участник: по иерархии ролей ему положено
-    // 5-10% визуального веса, не больше.
-    const target = settings.layers.base.enabled ? 0.08 + mood.energy * 0.12 : 0;
+    // 5-10% визуального веса, не больше. Под режиссёром в нём остаётся только
+    // градиент: фоновые модули входят в сцену и считаются в её сложности.
+    const target = settings.layers.base.enabled && !this.directed ? 0.08 + mood.energy * 0.12 : 0;
     this.baseWeight = lerp(this.baseWeight, target, k);
   }
 

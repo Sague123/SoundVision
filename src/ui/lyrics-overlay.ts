@@ -56,13 +56,22 @@ export class LyricsOverlay {
   /**
    * @param meanLuminance средняя яркость кадра 0..1 — от неё зависит цвет текста
    */
+  /**
+   * @param emphasis — насколько режиссёр выводит текст вперёд, 0..1. В
+   *   куплете текст крупнее и ярче, на дропе отступает. Но не пропадает:
+   *   текст песни зритель просил явно, и даже на дропе он остаётся читаемым.
+   */
   update(
     position: LyricsPosition,
     settings: Settings,
     palette: Palette | null,
     mood: MoodVector,
     meanLuminance: number,
+    emphasis = 1,
   ): void {
+    const e = Math.max(0, Math.min(1, emphasis));
+    this.element.style.setProperty('--lyrics-emphasis-scale', (0.86 + e * 0.24).toFixed(3));
+    this.element.style.setProperty('--lyrics-emphasis-opacity', (0.6 + e * 0.4).toFixed(3));
     const visible = settings.lyrics.enabled && position.line !== null;
     this.element.classList.toggle('lyrics--hidden', !visible);
     this.element.classList.toggle('lyrics--center', settings.lyrics.position === 'center');

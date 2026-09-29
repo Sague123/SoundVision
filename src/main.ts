@@ -5,7 +5,7 @@
 
 import './style.css';
 
-import { captureSystemAudio, CaptureError, type AudioCapture } from './audio/capture.ts';
+import { captureMicrophone, captureSystemAudio, CaptureError, type AudioCapture } from './audio/capture.ts';
 import { idleMood, MoodEngine, type MoodConfig, type MoodVector } from './audio/mood-vector.ts';
 import { CoverArtLoader } from './cover/cover-art.ts';
 import { NowPlaying, type NowPlayingTrack } from './cover/now-playing.ts';
@@ -22,7 +22,9 @@ import { LyricsOverlay } from './ui/lyrics-overlay.ts';
 import { NowPlayingCard } from './ui/now-playing-card.ts';
 import { loadSettings, saveSettings } from './ui/presets.ts';
 import { SettingsPanel } from './ui/settings-panel.ts';
-import { StartScreen } from './ui/start-screen.ts';
+import { StartScreen, type AudioSourceKind } from './ui/start-screen.ts';
+import { DirectorRuntime, type DirectorStep } from './director/runtime.ts';
+import { DirectorHud } from './ui/director-hud.ts';
 
 const CURSOR_IDLE_MS = 2500;
 const STATUS_INTERVAL_MS = 500;
@@ -39,6 +41,13 @@ class App {
   private readonly lyricsOverlay = new LyricsOverlay();
   private readonly card = new NowPlayingCard();
   private readonly debugOverlay = new DebugOverlay();
+  /** Режиссёр целиком: признаки, состояние, решения, обучение. */
+  private readonly director = new DirectorRuntime();
+  private readonly hud: DirectorHud;
+  private lastStep: DirectorStep | null = null;
+  private lastDetailsMs = 0;
+  /** Снимок настроек для неявной обратной связи: что именно поменял зритель. */
+  private watched = watchedSnapshot(null);
   private readonly panel: SettingsPanel;
   private readonly startScreen: StartScreen;
 
@@ -61,6 +70,11 @@ class App {
   constructor(private readonly root: HTMLElement) {
     this.canvas.className = 'stage';
     this.compositor = new Compositor(this.canvas);
+    this.hud = new DirectorHud(
+      (index) => this.director.coach.answer(index, performance.now()),
+      () => this.director.coach.rejectAll(performance.now()),
+    );
+    this.watched = watchedSnapshot(this.settings);
 
     this.panel = new SettingsPanel(this.settings, {
       onChange: () => {
@@ -68,6 +82,8 @@ class App {
         // Только ручной трек: applySources целиком дёргал бы Spotify и мост
         // на каждое движение любого ползунка.
         this.applyManualTrack();
+        this.learnFromPanel();
+        this.applyUiSettings();
       },
       onReshuffle: () => this.compositor.reshuffle(),
       onSpotifyConnect: () => void this.connectSpotify(),
@@ -77,16 +93,21 @@ class App {
         this.persist();
         this.panel.refresh();
       },
+      onDirectorReset: () => this.director.model.reset(),
+      onDirectorExport: () => this.director.model.export(),
       onReplace: (next) => {
+        // Смена пресета — сигнал, что текущая картинка не устроила.
+        this.director.presetSwitched();
         // Копируем поля в существующий объект: на него уже ссылаются модули.
         Object.assign(this.settings, structuredClone(next));
+        this.watched = watchedSnapshot(this.settings);
         this.persist();
         this.panel.refresh();
         this.applySources();
       },
     });
 
-    this.startScreen = new StartScreen({ onStart: () => this.start() });
+    this.startScreen = new StartScreen({ onStart: (source) => this.start(source) });
 
     this.root.append(
       this.canvas,
@@ -94,6 +115,8 @@ class App {
       this.card.element,
       this.card.progressLine,
       this.debugOverlay.element,
+      this.hud.element,
+      this.hud.questionElement,
       this.panel.element,
       this.startScreen.element,
     );
@@ -122,9 +145,9 @@ class App {
     this.renderIdleFrame();
   }
 
-  private async start(): Promise<void> {
+  private async start(source: AudioSourceKind): Promise<void> {
     try {
-      this.capture = await captureSystemAudio();
+      this.capture = source === 'microphone' ? await captureMicrophone() : await captureSystemAudio();
     } catch (err) {
       if (err instanceof CaptureError) throw new Error(err.message);
       throw err;
@@ -168,15 +191,21 @@ class App {
     this.lastFrameMs = timestamp;
 
     const mood = engine.update(timestamp, this.settings.audio as MoodConfig);
-    this.renderFrame(mood);
+    this.renderFrame(mood, true);
   };
 
   private renderIdleFrame(): void {
-    this.renderFrame(idleMood(performance.now()));
+    this.renderFrame(idleMood(performance.now()), false);
   }
 
-  private renderFrame(mood: MoodVector): void {
-    const stats = this.compositor.render(mood, this.settings, this.coverLoader.art);
+  /**
+   * @param live — кадр живого звука. Режиссёр работает только на нём: на
+   *   нейтральном кадре до запуска захвата ему нечего слушать.
+   */
+  private renderFrame(mood: MoodVector, live: boolean): void {
+    const step = live ? this.director.step(mood, this.settings) : null;
+    this.lastStep = step;
+    const stats = this.compositor.render(mood, this.settings, this.coverLoader.art, step?.output ?? null);
 
     const track = this.nowPlaying.current();
     this.card.update(track, this.settings, mood.timeMs);
@@ -186,9 +215,26 @@ class App {
       stats.palette,
       mood,
       stats.meanLuminance,
+      step?.output?.typography ?? 1,
     );
 
-    this.debugOverlay.update(mood, stats);
+    this.hud.update(step, this.settings, mood.timeMs);
+    // Активные эффекты и решение собираются в массивы — не на каждом кадре.
+    const detailsDue = mood.timeMs - this.lastDetailsMs > 150;
+    const decisions = this.director.director.decisions;
+    const decision = decisions[decisions.length - 1] ?? null;
+    if (detailsDue && (this.settings.director.hud || this.settings.debug)) {
+      this.lastDetailsMs = mood.timeMs;
+      const effects = this.director.director.activeEffects();
+      this.hud.updateDetails(effects, decision
+        ? `${decision.reason || '—'}${decision.transition ? ` · ${decision.transition}` : ''}`
+        : '', this.director.model.profile, this.director.model.observationCount);
+      this.debugOverlay.update(mood, stats, step ? {
+        step, effects, decision, decisionMs: this.director.director.lastTickMs,
+      } : null);
+    } else if (!this.settings.debug) {
+      this.debugOverlay.update(mood, stats);
+    }
 
     if (mood.timeMs - this.lastStatusMs > STATUS_INTERVAL_MS) {
       this.lastStatusMs = mood.timeMs;
@@ -344,6 +390,24 @@ class App {
    */
   private applyUiSettings(): void {
     this.debugOverlay.setVisible(this.settings.debug);
+    this.hud.setVisible(this.settings.director.hud);
+  }
+
+  /**
+   * Неявное обучение из панели: выключил эффект — минус ему в этом
+   * контексте, прибавил интенсивность — плюс текущей сцене, убавил — минус.
+   * Сравниваем со снимком прошлого состояния, чтобы понять, что именно
+   * поменялось, — панель сообщает лишь «что-то изменилось».
+   */
+  private learnFromPanel(): void {
+    const next = watchedSnapshot(this.settings);
+    const prev = this.watched;
+    this.watched = next;
+    if (!this.lastStep) return;
+    for (const [id, enabled] of Object.entries(next.enabled)) {
+      if (prev.enabled[id] !== enabled) this.director.effectToggled(id, enabled);
+    }
+    this.director.intensityChanged(next.intensity - prev.intensity);
   }
 
   private wireInput(): void {
@@ -369,6 +433,38 @@ class App {
           this.panel.close();
           this.root.classList.remove('app--panel');
           break;
+        // Режиссёр: пропустить сцену, похвалить, отвергнуть.
+        case 'n':
+          if (this.lastStep) this.director.skip(performance.now());
+          break;
+        case 'l':
+          if (this.lastStep) this.director.like();
+          break;
+        case 'x':
+          if (this.lastStep) this.director.reject(performance.now());
+          break;
+        case 'h':
+          this.settings.director.hud = !this.settings.director.hud;
+          this.persist();
+          this.applyUiSettings();
+          this.panel.refresh();
+          break;
+        case 't':
+          this.settings.director.training = !this.settings.director.training;
+          this.persist();
+          this.applyUiSettings();
+          this.panel.refresh();
+          break;
+        // Ответ на вопрос обучения: цифра — вариант, 0 — ни один.
+        case '0':
+          this.director.coach.rejectAll(performance.now());
+          break;
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+          if (this.director.coach.current) this.director.coach.answer(Number(event.key) - 1, performance.now());
+          break;
         default:
           break;
       }
@@ -380,6 +476,10 @@ class App {
       window.clearTimeout(this.cursorTimer);
       this.cursorTimer = window.setTimeout(() => document.body.classList.add('idle'), CURSOR_IDLE_MS);
     });
+
+    // Память режиссёра пишется в хранилище не чаще раза в несколько секунд —
+    // при закрытии дописываем хвост.
+    window.addEventListener('pagehide', () => this.director.flush());
 
     // Wake lock снимается при сворачивании вкладки — возвращаем его обратно.
     document.addEventListener('visibilitychange', () => {
@@ -421,3 +521,14 @@ class App {
 const root = document.getElementById('app');
 if (!root) throw new Error('Не найден контейнер #app');
 void new App(root).init();
+
+/** То, по изменению чего режиссёр учится неявно. */
+function watchedSnapshot(settings: Settings | null): { enabled: Record<string, boolean>; intensity: number } {
+  if (!settings) return { enabled: {}, intensity: 0 };
+  const enabled: Record<string, boolean> = {};
+  for (const [id, p] of Object.entries(settings.primitives)) enabled[id] = p.enabled;
+  // Интенсивность — среднее ручек, которые делают кадр насыщеннее.
+  const intensity = (settings.transients.intensity + settings.particles.density
+    + settings.light.bloom + settings.motion.amount) / 4;
+  return { enabled, intensity };
+}

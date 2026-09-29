@@ -16,6 +16,7 @@ import { FONT_CHOICES, type FontMoodKey } from './fonts.ts';
 import { LYRICS_ANIMATIONS, type LyricsAnimation } from './lyrics-overlay.ts';
 import { ALL_PRIMITIVE_IDS, PRIMITIVE_LABELS, type PrimitiveId } from '../render/primitives/types.ts';
 import { PRIMITIVE_PARAMS, type ParamSpec } from '../render/primitives/tuning.ts';
+import { SCENES } from '../director/scenes.ts';
 import {
   MAX_SAFE_FLASH_HZ, defaultSettings, type PrimitiveRole, type Settings,
 } from '../settings.ts';
@@ -54,6 +55,10 @@ export interface SettingsPanelHandlers {
   onSpotifyDisconnect(): void;
   /** Полная замена настроек (загрузка пресета). */
   onReplace(settings: Settings): void;
+  /** Стереть всё, чему научился режиссёр. */
+  onDirectorReset(): void;
+  /** Выгрузить память режиссёра в JSON. */
+  onDirectorExport(): string;
 }
 
 /** Умолчания для кнопок сброса: один снимок на всю жизнь панели. */
@@ -229,6 +234,72 @@ export class SettingsPanel {
       ),
       note('Пресет — полный снимок всех настроек с именем и меткой времени. '
         + 'Хранятся в браузере; экспорт в JSON нужен для бэкапа и переноса на другую машину.'),
+    ]);
+
+    this.addSection('Режиссёр', () => [
+      note('Режиссёр слушает музыку и сам решает, какая сцена, какой переход, сколько '
+        + 'частиц и насколько резкая камера. Ваши ползунки ниже — потолок: режиссёр '
+        + 'работает внутри них и не может перебить, например, убранное движение.'),
+      this.track(select({
+        label: 'Режим',
+        options: [
+          { value: 'auto', label: 'Авто — режиссёр ведёт всё' },
+          { value: 'semi', label: 'Полуавто — сцена меняется только на границе части' },
+          { value: 'manual', label: 'Вручную — режиссёр выключен' },
+        ],
+        get: () => s.director.mode,
+        set: (v: 'auto' | 'semi' | 'manual') => { s.director.mode = v; },
+        def: d.director.mode,
+      })),
+      this.track(select({
+        label: 'Закрепить сцену',
+        options: [
+          { value: '', label: 'Не закреплять' },
+          ...SCENES.map((scene) => ({ value: scene.id, label: scene.name })),
+        ],
+        get: () => s.director.lockedScene ?? '',
+        set: (v) => { s.director.lockedScene = v === '' ? null : v; },
+        def: '',
+        hint: 'Работает в полуавтомате: сцена держится, режиссёр правит лишь акценты',
+      })),
+      this.track(toggle({
+        label: 'Режим обучения',
+        get: () => s.director.training, set: (v) => { s.director.training = v; },
+        def: d.director.training,
+        hint: 'Режиссёр изредка спрашивает, когда не уверен, и показывает варианты. Клавиши 1-4, 0 — ни один',
+      })),
+      this.track(slider({
+        label: 'Вопросы не чаще', min: 30, max: 600, step: 10,
+        get: () => s.director.trainingIntervalSec, set: (v) => { s.director.trainingIntervalSec = v; },
+        format: (v) => `раз в ${v.toFixed(0)} с`, def: d.director.trainingIntervalSec,
+      })),
+      this.track(toggle({
+        label: 'Сюрпризы',
+        get: () => s.director.surprise, set: (v) => { s.director.surprise = v; },
+        def: d.director.surprise,
+        hint: 'Изредка на сильном ударе кадр почти гаснет и на полсекунды выходит одна яркая форма',
+      })),
+      this.track(slider({
+        label: 'Сдвиг сложности', min: -0.3, max: 0.3, step: 0.01,
+        get: () => s.director.complexityBias, set: (v) => { s.director.complexityBias = v; },
+        format: (v) => (v === 0 ? 'как решит режиссёр' : `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`),
+        def: d.director.complexityBias,
+        hint: 'Минус — чище и проще кадр, плюс — насыщеннее',
+      })),
+      this.track(toggle({
+        label: 'Панель режиссёра на экране',
+        get: () => s.director.hud, set: (v) => { s.director.hud = v; },
+        def: d.director.hud,
+        hint: 'Клавиша H. N — другая сцена, L — нравится, X — не то',
+      })),
+      row(
+        button('Выгрузить память', () => this.downloadDirectorMemory()),
+        button('Забыть всё', () => {
+          if (window.confirm('Стереть всё, чему режиссёр научился о вашем вкусе?')) {
+            this.handlers.onDirectorReset();
+          }
+        }, 'panel__button--ghost'),
+      ),
     ]);
 
     this.addSection('Общее', () => [
@@ -925,6 +996,16 @@ export class SettingsPanel {
     this.handlers.onReplace(structuredClone(preset.settings));
     setActivePreset(preset.name);
     this.renderPresets();
+  }
+
+  private downloadDirectorMemory(): void {
+    const blob = new Blob([this.handlers.onDirectorExport()], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `soundvision-director-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   private exportToFile(): void {

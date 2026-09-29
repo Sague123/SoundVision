@@ -14,6 +14,8 @@ import { GenreLayer } from './layer-genre.ts';
 import { TransientLayer, type TransientDebug } from './layer-transient.ts';
 import { findHarmony, PaletteEngine, type HarmonyScheme, type Palette } from './palette.ts';
 import type { PrimitiveId, RenderFrame } from './primitives/types.ts';
+import type { DirectorOutput } from '../director/director.ts';
+import { EffectiveSettings } from '../director/effective-settings.ts';
 import { Scene, type SceneConfig, type SceneState } from './scene.ts';
 import { PostPass, QUALITY_ORDER, type LightSettings, type QualityLevel } from './post-pass.ts';
 import { trackKey } from './seed.ts';
@@ -92,6 +94,9 @@ export class Compositor {
   private bloomThreshold = 0.5;
   /** Доля кадра за примитивом, которому нужен прямой горизонт. */
   private stableFrame = 0;
+  /** Настройки с наложенными решениями режиссёра — один объект на всё время. */
+  private readonly effective = new EffectiveSettings();
+  private direction: DirectorOutput | null = null;
   private meanLuminance = 0.2;
   private frameCounter = 0;
   private readonly lumaCanvas = document.createElement('canvas');
@@ -152,17 +157,25 @@ export class Compositor {
     this.reseedLayers();
   }
 
-  render(mood: MoodVector, settings: Settings, cover: CoverArt): CompositorStats {
+  /**
+   * @param direction — решения режиссёра на этот кадр; null — режиссёр
+   *   выключен, и кадр ведёт собственная система фокуса генератора.
+   */
+  render(mood: MoodVector, userSettings: Settings, cover: CoverArt, direction: DirectorOutput | null = null): CompositorStats {
     const started = performance.now();
+    const settings = this.effective.derive(userSettings, direction);
+    this.direction = direction;
     const harmony = this.activeHarmony(settings);
 
     // Сцена идёт первой: от неё зависят и палитра, и набор примитивов, и камера.
-    const scene = this.scene.update(mood, sceneConfig(settings, this.stableFrame));
+    const warp = direction ? direction.modifiers.warp * 0.6 : 0;
+    const scene = this.scene.update(mood, sceneConfig(settings, this.stableFrame, warp));
+    if (direction) applyGlitch(scene, direction.modifiers.glitch);
     const palette = this.buildPalette(mood, settings, cover, harmony);
     this.lastPalette = palette;
 
     this.applyQuality(mood.timeMs, settings);
-    const state = this.generator.update(mood, settings, scene);
+    const state = this.generator.update(mood, settings, scene, direction?.weights ?? null);
     // На следующий кадр: сцена считается раньше генератора, поэтому доля
     // «стабильного» примитива приезжает с опозданием на кадр. Для плавно
     // едущего веса это незаметно, а порядок вычислений остаётся простым.
@@ -183,10 +196,13 @@ export class Compositor {
       ? this.genre.render(frame, state, clamp01(settings.memory.trails))
       : [];
 
-    // Частицы привязаны к соло: набор типов приходит от генератора.
+    // Частицы привязаны к соло: набор типов приходит от режиссёра (он знает
+    // сцену), а без него — от генератора.
     this.transient.update(mood, settings, scene, {
       ...settings.particles,
-      preferred: settings.particles.mode === 'auto' ? state.particles : undefined,
+      preferred: settings.particles.mode === 'auto'
+        ? (direction ? direction.particles : state.particles)
+        : undefined,
     });
     const transientDebug = settings.layers.transient.enabled
       ? this.transient.render(palette, scene, clamp01(settings.layers.transient.weight))
@@ -195,6 +211,7 @@ export class Compositor {
     this.compose(settings, scene);
     this.measureLuminance(settings);
     const posted = this.applyPost(scene, settings, palette);
+    if (direction) this.applyBlackout(direction.modifiers.blackout);
 
     const frameMs = performance.now() - started;
     this.trackFps(mood.deltaMs);
@@ -254,15 +271,19 @@ export class Compositor {
     // Кадр должен покрыть себя после поворота, сдвига и ухода точки интереса.
     const margin = (Math.max(Math.abs(offsetX), Math.abs(offsetY))
       + Math.max(Math.abs(focusX - cx), Math.abs(focusY - cy))) / minSide;
-    const overscale = coverScale(this.width, this.height, roll) * (1 + margin * 2.2);
-    const scale = Math.max(1, camera.zoom * amount + (1 - amount)) * overscale;
+    // Крен и масштаб перехода ложатся поверх камеры. Масштаб меньше единицы
+    // здесь намеренный: схлопывание уводит кадр в точку на чёрном.
+    const mods = this.direction?.modifiers;
+    const extraRoll = mods ? mods.roll : 0;
+    const overscale = coverScale(this.width, this.height, roll + extraRoll) * (1 + margin * 2.2);
+    const scale = Math.max(1, camera.zoom * amount + (1 - amount)) * overscale * (mods ? mods.zoom : 1);
     // Сжатие по вертикали компенсируем растяжением по горизонтали: кадр
     // «придавливает», а не уменьшает.
     const squash = 1 - (1 - camera.squash) * amount;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.translate(focusX + offsetX, focusY + offsetY);
-    ctx.rotate(roll);
+    ctx.rotate(roll + extraRoll);
     ctx.scale(scale / squash, scale * squash);
     ctx.translate(-focusX, -focusY);
 
@@ -292,9 +313,22 @@ export class Compositor {
 
   /** 'auto' — схему выбирает seed трека; иначе пользователь фиксирует её вручную. */
   private activeHarmony(settings: Settings): HarmonyScheme {
-    return findHarmony(settings.palette.harmonyId === 'auto'
-      ? this.generator.seed.harmonyId
-      : settings.palette.harmonyId);
+    if (settings.palette.harmonyId !== 'auto') return findHarmony(settings.palette.harmonyId);
+    // Вариация сцены выбирает свою гармонию: та же сцена при следующем показе
+    // узнаётся по форме, но не повторяется по цвету.
+    return findHarmony(this.direction?.harmonyId ?? this.generator.seed.harmonyId);
+  }
+
+  /** Провал в темноту — поверх всего, уже после тон-маппинга. */
+  private applyBlackout(amount: number): void {
+    if (amount <= 0.001) return;
+    const ctx = this.ctx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = Math.min(1, amount);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, this.width, this.height);
+    ctx.globalAlpha = 1;
   }
 
   /**
@@ -499,7 +533,7 @@ function coverScale(width: number, height: number, roll: number): number {
  *   горизонт. На неё приглушаются деформации: перспективная сетка, согнутая
  *   domain warp'ом, перестаёт читаться как пол.
  */
-function sceneConfig(settings: Settings, stableFrame: number): SceneConfig {
+function sceneConfig(settings: Settings, stableFrame: number, warp = 0): SceneConfig {
   const t = settings.transients;
   return {
     intensity: clamp01(t.intensity),
@@ -515,8 +549,8 @@ function sceneConfig(settings: Settings, stableFrame: number): SceneConfig {
     pressureWave: t.pressureWave,
     // Деформации тоже участвуют в укачивании, поэтому мастер движения их гасит.
     deformation: settings.deformation.enabled
-      ? clamp01(settings.deformation.amount) * clamp01(settings.motion.amount)
-        * (1 - clamp01(stableFrame) * 0.92)
+      ? clamp01((clamp01(settings.deformation.amount) + warp) * clamp01(settings.motion.amount)
+        * (1 - clamp01(stableFrame) * 0.92))
       : 0,
     deformations: {
       domainWarp: clamp01(settings.deformation.domainWarp),
@@ -540,4 +574,15 @@ function sceneConfig(settings: Settings, stableFrame: number): SceneConfig {
 /** Цвет палитры 0..255 → 0..1 для шейдера. */
 function toUnitRgb([r, g, b]: [number, number, number]): [number, number, number] {
   return [r / 255, g / 255, b / 255];
+}
+
+/**
+ * Глитч перехода ложится на те же каналы, что и глитч удара: сдвиг блоков и
+ * разлёт RGB. Берём максимум, а не сумму — удар и переход не складываются
+ * в двойной глитч.
+ */
+function applyGlitch(scene: SceneState, amount: number): void {
+  if (amount <= 0.001) return;
+  scene.impact.slice = Math.max(scene.impact.slice, amount * 0.8);
+  scene.impact.chromaticBurst = Math.max(scene.impact.chromaticBurst, amount * 0.7);
 }

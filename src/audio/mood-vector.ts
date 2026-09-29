@@ -48,6 +48,8 @@ export interface MoodVector {
   waveformRight: Float32Array;
   /** Линейные магнитуды спектра, длина fftSize/2. */
   spectrum: Float32Array;
+  /** Ширина одного бина спектра в герцах: по ней ищутся границы полос. */
+  binHz: number;
   stereo: boolean;
   silent: boolean;
   timeMs: number;
@@ -75,10 +77,12 @@ export class MoodEngine {
   private readonly stereo: boolean;
   private readonly waveform: Float32Array<ArrayBuffer>;
   private readonly waveformRight: Float32Array<ArrayBuffer>;
+  private readonly binHz: number;
 
   /** Нужен только граф Web Audio — не весь захват; так движок можно гонять на синтетике. */
   constructor(capture: Pick<AudioCapture, 'context' | 'analyser'> & Partial<Pick<AudioCapture, 'left' | 'right' | 'stereo'>>) {
     const sampleRate = capture.context.sampleRate;
+    this.binHz = sampleRate / capture.analyser.fftSize;
     this.features = new FeatureExtractor(capture.analyser, sampleRate);
     this.chroma = new ChromaAnalyzer(sampleRate / capture.analyser.fftSize);
     this.left = capture.left ?? capture.analyser;
@@ -122,6 +126,7 @@ export class MoodEngine {
       waveform: this.waveform,
       waveformRight: this.waveformRight,
       spectrum: raw.spectrum,
+      binHz: this.binHz,
       stereo: this.stereo,
       silent: raw.silent,
       timeMs: nowMs,
@@ -151,6 +156,8 @@ export function idleMood(timeMs = 0): MoodVector {
     waveform: new Float32Array(2048),
     waveformRight: new Float32Array(2048),
     spectrum: new Float32Array(1024),
+    // 48 кГц при FFT 2048 — самый частый случай на Windows.
+    binHz: 48000 / 2048,
     stereo: false,
     silent: true,
     timeMs,

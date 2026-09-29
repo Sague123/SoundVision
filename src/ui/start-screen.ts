@@ -3,13 +3,16 @@
  * на сессию, поэтому без явного клика звук взять невозможно.
  */
 
+export type AudioSourceKind = 'system' | 'microphone';
+
 export interface StartScreenHandlers {
-  onStart(): Promise<void>;
+  onStart(source: AudioSourceKind): Promise<void>;
 }
 
 export class StartScreen {
   readonly element = document.createElement('div');
   private readonly button = document.createElement('button');
+  private readonly micButton = document.createElement('button');
   private readonly error = document.createElement('p');
 
   constructor(private readonly handlers: StartScreenHandlers) {
@@ -32,17 +35,23 @@ export class StartScreen {
 
     this.button.className = 'start__button';
     this.button.textContent = 'Запустить визуализацию';
-    this.button.addEventListener('click', () => void this.start());
+    this.button.addEventListener('click', () => void this.start('system'));
+
+    // Живой режим: микрофон или линейный вход — концерт, пульт, колонки в комнате.
+    this.micButton.className = 'start__button start__button--secondary';
+    this.micButton.textContent = 'Микрофон или линейный вход';
+    this.micButton.addEventListener('click', () => void this.start('microphone'));
 
     this.error.className = 'start__error';
     this.error.hidden = true;
 
-    this.element.querySelector('.start__card')?.append(this.button, this.error);
+    this.element.querySelector('.start__card')?.append(this.button, this.micButton, this.error);
   }
 
   show(): void {
     this.element.classList.remove('start--hidden');
     this.button.disabled = false;
+    this.micButton.disabled = false;
     this.button.textContent = 'Запустить визуализацию';
   }
 
@@ -54,15 +63,17 @@ export class StartScreen {
     this.error.textContent = message;
     this.error.hidden = false;
     this.button.disabled = false;
+    this.micButton.disabled = false;
     this.button.textContent = 'Попробовать снова';
   }
 
-  private async start(): Promise<void> {
+  private async start(source: AudioSourceKind): Promise<void> {
     this.button.disabled = true;
+    this.micButton.disabled = true;
     this.button.textContent = 'Ждём разрешения…';
     this.error.hidden = true;
     try {
-      await this.handlers.onStart();
+      await this.handlers.onStart(source);
     } catch (err) {
       this.showError((err as Error).message);
     }

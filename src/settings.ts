@@ -93,6 +93,26 @@ export interface Settings {
   };
   /** Свои настройки каждого примитива — раздел на примитив в панели. */
   primitives: Record<PrimitiveId, PrimitiveSettings>;
+  director: {
+    /**
+     * auto — режиссёр ведёт кадр целиком; semi — меняет сцену только на
+     * границе части и держит закреплённую; manual — режиссёр молчит, кадр
+     * ведёт система фокуса или ручной список.
+     */
+    mode: 'auto' | 'semi' | 'manual';
+    /** Закреплённая сцена в полуавтомате; null — не закреплена. */
+    lockedScene: string | null;
+    /** Режим обучения: редкие вопросы в неуверенные моменты. */
+    training: boolean;
+    /** Не чаще одного вопроса за столько секунд. */
+    trainingIntervalSec: number;
+    /** Разрешить редкие сюрпризы на сильных ударах. */
+    surprise: boolean;
+    /** Ручной сдвиг желаемой сложности кадра, -0.3..0.3. */
+    complexityBias: number;
+    /** Показывать панель режиссёра поверх кадра. */
+    hud: boolean;
+  };
   motion: {
     /**
      * Общий множитель амплитуды движения: камера, тряска, толчки, деформации.
@@ -328,6 +348,15 @@ export function defaultSettings(): Settings {
       enterMs: 1100,
     },
     primitives: defaultPrimitives(),
+    director: {
+      mode: 'auto',
+      lockedScene: null,
+      training: false,
+      trainingIntervalSec: 90,
+      surprise: true,
+      complexityBias: 0,
+      hud: false,
+    },
     motion: {
       amount: 1,
       budget: 2.4,
@@ -633,6 +662,9 @@ export function mergeSettings(saved: unknown): Settings {
   mergeSection(base.camera, source.camera);
   mergeSection(base.generator, source.generator);
   mergeSection(base.focus, source.focus);
+  mergeSection(base.director, source.director);
+  if (!['auto', 'semi', 'manual'].includes(base.director.mode)) base.director.mode = 'auto';
+  if (typeof base.director.lockedScene !== 'string') base.director.lockedScene = null;
   mergeSection(base.motion, source.motion);
   mergeSection(base.quality, source.quality);
   mergeSection(base.transients, source.transients);

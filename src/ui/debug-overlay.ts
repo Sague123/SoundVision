@@ -4,6 +4,8 @@
  */
 
 import type { MoodVector } from '../audio/mood-vector.ts';
+import type { DirectorStep } from '../director/runtime.ts';
+import type { VisualDecision } from '../director/director.ts';
 import type { CompositorStats } from '../render/compositor.ts';
 import { IMPULSE_KIND_LABELS, SUBSTANCE_LABELS } from '../render/scene.ts';
 
@@ -49,7 +51,7 @@ export class DebugOverlay {
     this.element.classList.toggle('debug--hidden', !visible);
   }
 
-  update(mood: MoodVector, stats: CompositorStats): void {
+  update(mood: MoodVector, stats: CompositorStats, director: DirectorDebug | null = null): void {
     if (this.element.classList.contains('debug--hidden')) return;
 
     for (const trace of this.traces) trace.values[this.writeIndex] = mood[trace.key];
@@ -109,6 +111,7 @@ export class DebugOverlay {
         ` профиль ${lastImpulse.profile.low.toFixed(2)}/${lastImpulse.profile.mid.toFixed(2)}/${lastImpulse.profile.high.toFixed(2)}` +
         `${lastImpulse.echo ? ' (эхо)' : ''}` : '—'}`,
       `seed     ${stats.seedLabel}`,
+      ...directorLines(director),
     ].join('\n');
   }
 
@@ -156,4 +159,49 @@ export class DebugOverlay {
 function bar(value: number, width = 16): string {
   const filled = Math.round(Math.min(1, Math.max(0, value)) * width);
   return `${'█'.repeat(filled)}${'·'.repeat(width - filled)}`;
+}
+
+/** Что показывает оверлей о режиссёре (§21). */
+export interface DirectorDebug {
+  step: DirectorStep;
+  effects: Array<{ id: string; weight: number; state: string }>;
+  decision: VisualDecision | null;
+  decisionMs: number;
+}
+
+function directorLines(d: DirectorDebug | null): string[] {
+  if (!d) return ['режиссёр выключен'];
+  const { step } = d;
+  const f = step.features;
+  const out = step.output;
+  const lines = [
+    '— режиссёр —',
+    `время    аудио ${step.audioMs.toFixed(2)} мс  режиссёр ${step.directorMs.toFixed(2)} мс`
+      + `  решение ${d.decisionMs.toFixed(2)} мс`,
+    // Время на GPU браузер не отдаёт без EXT_disjoint_timer_query, который
+    // Chrome держит выключенным из-за атак по времени. Врать цифрой не будем.
+    'GPU      н/д — браузер не даёт таймер-запросов',
+    `состояние ${step.state.state} (увер ${step.state.confidence.toFixed(2)},`
+      + ` держится ${(step.state.heldMs / 1000).toFixed(1)} с, до этого ${step.state.previous})`,
+    `признаки бас ${f.bass.toFixed(2)} атака ${f.transientStrength.toFixed(2)} голос ${f.vocalLikelihood.toFixed(2)}`
+      + ` тренд ${f.energyTrend.toFixed(2)} скачок ${f.energyJump.toFixed(2)} плотн ${f.rhythmicDensity.toFixed(2)}`,
+    `         5 полос ${bar(f.bass, 4)} ${bar(f.lowMid, 4)} ${bar(f.mid, 4)} ${bar(f.highMid, 4)} ${bar(f.treble, 4)}`
+      + `  стерео ${f.stereoWidth.toFixed(2)} разброс ${f.dynamicRange.toFixed(2)}`,
+  ];
+  if (out) {
+    lines.push(
+      `сцена    ${out.scene.name}  увер режиссёра ${out.confidence.toFixed(2)}${out.surprise ? '  [сюрприз]' : ''}`,
+      `сложн    ${out.complexity.toFixed(2)} / цель ${out.targetComplexity.toFixed(2)}`
+        + `  камера ${out.camera} ${out.cameraAmount.toFixed(2)}  текст ${out.typography.toFixed(2)}`,
+      `эффекты  ${d.effects.slice(0, 6).map((e) => `${e.id.replace('prim:', '')} ${e.weight.toFixed(2)} ${e.state}`).join(', ') || '—'}`,
+    );
+  }
+  if (d.decision) {
+    const dec = d.decision;
+    lines.push(`решение  ${(dec.at / 1000).toFixed(1)} с: ${dec.reason || '—'}`
+      + `${dec.transition ? ` [${dec.transition}]` : ''}`
+      + `${dec.weaken.length ? ` ослабить ${dec.weaken.join(',')}` : ''}`
+      + `${dec.strengthen.length ? ` усилить ${dec.strengthen.join(',')}` : ''}`);
+  }
+  return lines;
 }

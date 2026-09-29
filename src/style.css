@@ -198,8 +198,11 @@ body.idle {
   border-radius: 16px;
   background: color-mix(in srgb, var(--lyrics-plate) 46%, transparent);
   backdrop-filter: blur(16px) saturate(0.8);
-  transform: translateY(var(--lyrics-nudge));
-  transition: background 0.4s ease;
+  /* Акцент режиссёра: в куплете текст крупнее, на дропе отступает. На
+     плашке, а не на корне: у корня прозрачность занята скрытием строки. */
+  transform: translateY(var(--lyrics-nudge)) scale(var(--lyrics-emphasis-scale, 1));
+  opacity: var(--lyrics-emphasis-opacity, 1);
+  transition: background 0.4s ease, transform 0.6s ease, opacity 0.6s ease;
 }
 
 /* Режим для тех, кто реально подпевает: плотная подложка, читаемость важнее картинки. */
@@ -836,4 +839,300 @@ body.idle {
 
 .panel__note--modified {
   color: #ffd479;
+}
+
+/* --- Панель режиссёра ---
+ * Инструмент, а не игрушка: узкая, тёмная, с тонкими линиями и без неона.
+ * Акцент один — приглушённый бирюзовый, как в концепте. */
+
+.director {
+  --director-accent: #5fd6c8;
+  position: absolute;
+  top: 18px;
+  right: calc(var(--panel-width) + 18px);
+  z-index: 6;
+  width: 272px;
+  padding: 14px 16px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(7, 9, 13, 0.74);
+  backdrop-filter: blur(14px);
+  color: rgba(235, 240, 245, 0.92);
+  font: 11px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  transition: opacity 0.3s ease, right 0.28s ease;
+}
+
+.director--hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.director--surprise {
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.director__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.director__title {
+  flex: 1;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(235, 240, 245, 0.7);
+}
+
+.director__badge {
+  padding: 2px 6px;
+  border: 1px solid rgba(95, 214, 200, 0.4);
+  border-radius: 4px;
+  color: var(--director-accent);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+}
+
+.director__badge--dim {
+  border-color: rgba(255, 255, 255, 0.12);
+  color: rgba(235, 240, 245, 0.45);
+}
+
+.director__core {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.director__ring-box {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  flex: none;
+}
+
+.director__ring {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.director__ring-track,
+.director__ring-fill {
+  fill: none;
+  stroke-width: 2.5;
+}
+
+.director__ring-track {
+  stroke: rgba(255, 255, 255, 0.08);
+}
+
+.director__ring-fill {
+  stroke: var(--director-accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.4s ease;
+}
+
+.director__ring-value {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.director__label {
+  margin-bottom: 3px;
+  color: rgba(235, 240, 245, 0.42);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.director__state {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.director__bars {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+
+.director__bar,
+.director__active {
+  display: grid;
+  grid-template-columns: 72px 1fr 26px;
+  align-items: center;
+  gap: 8px;
+}
+
+.director__active {
+  grid-template-columns: 110px 1fr;
+  margin-top: 4px;
+}
+
+.director__bar-name,
+.director__active-name {
+  color: rgba(235, 240, 245, 0.6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.director__bar-track {
+  position: relative;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: visible;
+}
+
+.director__bar-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  background: var(--director-accent);
+  transition: width 0.12s linear;
+}
+
+/* Метка цели сложности: видно, перебирает режиссёр или недобирает. */
+.director__bar-mark {
+  position: absolute;
+  top: -3px;
+  width: 1px;
+  height: 9px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.director__bar-value {
+  color: rgba(235, 240, 245, 0.5);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.director__section {
+  padding-top: 10px;
+  margin-top: 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  margin-bottom: 10px;
+}
+
+.director__scene {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.director__decision {
+  color: rgba(235, 240, 245, 0.7);
+}
+
+.director__keys {
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(235, 240, 245, 0.35);
+  font-size: 9.5px;
+}
+
+/* --- Карточка вопроса обучения ---
+ * Сверху по центру: снизу живёт текст песни, и перекрывать его нельзя. */
+
+.director-question {
+  position: absolute;
+  top: 22px;
+  left: calc((100% - var(--panel-width)) / 2);
+  z-index: 7;
+  width: min(420px, 80vw);
+  padding: 14px 16px 16px;
+  border: 1px solid rgba(95, 214, 200, 0.35);
+  border-radius: 10px;
+  background: rgba(7, 9, 13, 0.82);
+  backdrop-filter: blur(14px);
+  color: rgba(235, 240, 245, 0.95);
+  font: 12px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  transform: translateX(-50%);
+  transition: opacity 0.35s ease;
+}
+
+.director-question--hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.director-question__label {
+  margin-bottom: 4px;
+  color: #5fd6c8;
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.director-question__prompt {
+  margin-bottom: 10px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.director-question__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.director-question__option,
+.director-question__none {
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Вариант, который показан на экране прямо сейчас. */
+.director-question__option--showing {
+  border-color: #5fd6c8;
+  color: #5fd6c8;
+}
+
+.director-question__none {
+  color: rgba(235, 240, 245, 0.5);
+  border-style: dashed;
+}
+
+.director-question__timer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(95, 214, 200, 0.6);
+  transform-origin: left center;
+}
+
+/* Профиль вкуса — приглушённее живых показателей: он меняется медленно. */
+.director__bar-fill--dna {
+  background: rgba(235, 240, 245, 0.55);
+}
+
+.director__lessons {
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.start__button--secondary {
+  margin-top: 8px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: rgba(235, 240, 245, 0.85);
 }

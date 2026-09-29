@@ -86,6 +86,47 @@ export async function captureSystemAudio(): Promise<AudioCapture> {
     );
   }
 
+  return buildCapture(stream, audioTracks[0]);
+}
+
+/**
+ * Микрофон или линейный вход — «живой режим».
+ *
+ * Для концерта, диджейского пульта через звуковую карту или просто колонок в
+ * комнате. Всё, что «улучшает голос», выключено: шумодав и автогейн режут
+ * именно музыку — бочку принимают за шум, а громкость подтягивают так, что
+ * дроп и тихий куплет становятся одинаковыми.
+ */
+export async function captureMicrophone(): Promise<AudioCapture> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new CaptureError('Браузер не даёт доступа к микрофону.', 'unsupported');
+  }
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: { ideal: 2 },
+      },
+    });
+  } catch (err) {
+    const name = (err as DOMException)?.name;
+    if (name === 'NotAllowedError') throw new CaptureError('Доступ к микрофону отклонён.', 'denied');
+    if (name === 'NotFoundError') throw new CaptureError('Микрофон или линейный вход не найден.', 'no-audio');
+    throw new CaptureError(`Не удалось открыть микрофон: ${(err as Error).message}`, 'failed');
+  }
+  const track = stream.getAudioTracks()[0];
+  if (!track) {
+    stream.getTracks().forEach((t) => t.stop());
+    throw new CaptureError('В потоке микрофона нет звука.', 'no-audio');
+  }
+  return buildCapture(stream, track);
+}
+
+/** Граф анализа одинаков для любого источника — различается только поток. */
+async function buildCapture(stream: MediaStream, audioTrack: MediaStreamTrack): Promise<AudioCapture> {
   const context = new AudioContext({ latencyHint: 'interactive' });
   if (context.state === 'suspended') await context.resume();
 
@@ -110,7 +151,7 @@ export async function captureSystemAudio(): Promise<AudioCapture> {
   }
 
   const endedCallbacks: Array<() => void> = [];
-  audioTracks[0].addEventListener('ended', () => endedCallbacks.forEach((cb) => cb()));
+  audioTrack.addEventListener('ended', () => endedCallbacks.forEach((cb) => cb()));
 
   return {
     stream,
