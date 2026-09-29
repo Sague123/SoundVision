@@ -6,6 +6,8 @@
  * одинаково живая и на тихом джазе, и на закомпрессированном техно.
  */
 
+import type { AnalyserLike } from './capture.ts';
+
 export type Section = 'buildup' | 'drop' | 'calm' | 'steady';
 
 /**
@@ -157,7 +159,7 @@ export class FeatureExtractor {
   private sectionSince = 0;
   private buildupScore = 0;
 
-  constructor(private readonly analyser: AnalyserNode, sampleRate: number) {
+  constructor(private readonly analyser: AnalyserLike, sampleRate: number) {
     const bins = analyser.frequencyBinCount;
     this.freqDb = new Float32Array(bins);
     this.spectrum = new Float32Array(bins);

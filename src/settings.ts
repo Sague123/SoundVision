@@ -247,6 +247,12 @@ export interface Settings {
     bridge: boolean;
     bridgeUrl: string;
     /**
+     * Брать звук из вкладки YouTube Music через расширение. Тогда визуализация
+     * стартует сама, как только там заиграет музыка: без захвата экрана и без
+     * окна выбора источника.
+     */
+    bridgeAudio: boolean;
+    /**
      * Трек, введённый руками. Нужен, когда играет что угодно помимо Spotify
      * и YouTube Music: без имени трека нет ни обложки, ни текста песни, а
      * захват системного звука имени не даёт.
@@ -433,8 +439,11 @@ export function defaultSettings(): Settings {
     },
     sources: {
       spotify: false,
-      bridge: false,
+      // Мост включён по умолчанию: без него нет ни звука без захвата, ни
+      // названия трека. Если мост не запущен, клиент тихо переподключается.
+      bridge: true,
       bridgeUrl: 'ws://127.0.0.1:8787',
+      bridgeAudio: true,
       manualArtist: '',
       manualTitle: '',
       manualDurationSec: 0,

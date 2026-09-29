@@ -3,7 +3,7 @@
  * Слои и примитивы не знают ни про FFT, ни про analyser: только про эти числа.
  */
 
-import type { AudioCapture } from './capture.ts';
+import type { AnalyserLike, AudioInput } from './capture.ts';
 import { BeatTracker } from './beat-tracker.ts';
 import { ChromaAnalyzer, type KeyEstimate } from './chroma.ts';
 import {
@@ -72,16 +72,20 @@ export class MoodEngine {
   private readonly beat = new BeatTracker();
   private lastFrameMs = 0;
 
-  private readonly left: AnalyserNode;
-  private readonly right: AnalyserNode;
+  private readonly left: AnalyserLike;
+  private readonly right: AnalyserLike;
   private readonly stereo: boolean;
   private readonly waveform: Float32Array<ArrayBuffer>;
   private readonly waveformRight: Float32Array<ArrayBuffer>;
   private readonly binHz: number;
 
   /** Нужен только граф Web Audio — не весь захват; так движок можно гонять на синтетике. */
-  constructor(capture: Pick<AudioCapture, 'context' | 'analyser'> & Partial<Pick<AudioCapture, 'left' | 'right' | 'stereo'>>) {
-    const sampleRate = capture.context.sampleRate;
+  constructor(
+    capture: Pick<AudioInput, 'analyser'>
+      & Partial<Pick<AudioInput, 'left' | 'right' | 'stereo' | 'sampleRate'>>
+      & { context?: { sampleRate: number } },
+  ) {
+    const sampleRate = capture.sampleRate ?? capture.context?.sampleRate ?? 48000;
     this.binHz = sampleRate / capture.analyser.fftSize;
     this.features = new FeatureExtractor(capture.analyser, sampleRate);
     this.chroma = new ChromaAnalyzer(sampleRate / capture.analyser.fftSize);

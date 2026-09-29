@@ -95,14 +95,57 @@ body.idle {
   color: var(--ui-muted);
 }
 
-.start__steps {
-  margin: 0 0 18px;
-  padding-left: 20px;
-  line-height: 1.7;
+.start__lead {
+  margin: 0 0 12px;
+  line-height: 1.6;
 }
 
-.start__steps b {
+.start__lead b {
   color: var(--ui-accent);
+}
+
+/* Чего ждём от YouTube Music: точка-индикатор и одна строка. */
+.start__status {
+  position: relative;
+  margin: 0 0 18px;
+  padding: 10px 12px 10px 30px;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.start__status::before {
+  content: '';
+  position: absolute;
+  top: 16px;
+  left: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e0a040;
+}
+
+.start__status[data-state='waiting']::before {
+  background: var(--ui-accent);
+  animation: start-pulse 1.6s ease-in-out infinite;
+}
+
+.start__status[data-state='disabled']::before {
+  background: rgba(235, 240, 245, 0.35);
+}
+
+@keyframes start-pulse {
+  50% { opacity: 0.3; }
+}
+
+/* Захват и микрофон — запасной путь: тише основного текста. */
+.start__other {
+  margin: 18px 0 10px;
+  color: var(--ui-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 .start__hint {

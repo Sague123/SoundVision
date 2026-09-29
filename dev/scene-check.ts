@@ -25,6 +25,7 @@ import { PRIMITIVE_PARAMS, resolvePrimitiveParams } from '../src/render/primitiv
 import { exportPresets } from '../src/ui/presets.ts';
 import { makeSeed } from '../src/render/seed.ts';
 import { ContourBuilder } from '../src/render/contour.ts';
+import { BridgeAudioInput, encodeBridgeFrame } from '../src/audio/bridge-audio.ts';
 import type { NoteName } from '../src/audio/chroma.ts';
 import type { BandProfile } from '../src/audio/features.ts';
 
@@ -978,6 +979,44 @@ function moodAt(timeMs: number, overrides: Partial<MoodVector> = {}): MoodVector
   builder.build(field, cols, rows, 0.5);
   builder.chain();
   check('два круга — две линии', builder.chains === 2, `линий ${builder.chains}`);
+}
+
+// --- Звук из YouTube Music через мост ------------------------------------------
+{
+  /**
+   * Кадр пишет расширение, читает визуализатор — формат обязан совпадать.
+   * Проверяем круг «закодировать → принять → прочитать как анализатор» и то,
+   * что без кадров источник отдаёт тишину, а не залипший последний кадр.
+   */
+  let now = 0;
+  const input = new BridgeAudioInput(() => now);
+  const fft = 2048;
+  const spectrum = new Uint8Array(fft / 2);
+  spectrum[43] = 255;
+  const left = new Float32Array(fft).map((_, i) => Math.sin(i / 10) * 0.5);
+  const right = new Float32Array(fft).map((_, i) => Math.sin(i / 10) * 0.25);
+  const accepted = input.push(encodeBridgeFrame(spectrum, left, right, 44100, true, 7));
+  const db = new Float32Array(fft / 2);
+  input.analyser.getFloatFrequencyData(db);
+  const l = new Float32Array(fft);
+  const r = new Float32Array(fft);
+  const mix = new Float32Array(fft);
+  input.left.getFloatTimeDomainData(l);
+  input.right.getFloatTimeDomainData(r);
+  input.analyser.getFloatTimeDomainData(mix);
+  const peak = (a: Float32Array) => a.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  check('кадр моста читается как анализатор',
+    accepted && input.sampleRate === 44100 && Math.abs(db[43] + 10) < 0.01 && Math.abs(db[0] + 100) < 0.01
+      && Math.abs(peak(l) - 0.5) < 0.001 && Math.abs(peak(r) - 0.25) < 0.001
+      && Math.abs(peak(mix) - 0.375) < 0.001,
+    `${input.sampleRate} Гц, пик ${db[43].toFixed(1)} дБ, L ${peak(l).toFixed(3)}, R ${peak(r).toFixed(3)}`);
+
+  const junk = !input.push(new ArrayBuffer(64)) && !input.push(new Uint8Array(9232).buffer);
+  now = 2000;
+  input.left.getFloatTimeDomainData(l);
+  input.analyser.getFloatFrequencyData(db);
+  check('чужие кадры отбрасываются, без кадров — тишина', junk && !input.live && peak(l) === 0 && db[43] === -100,
+    `live ${input.live}, пик ${peak(l)}`);
 }
 
 console.log(failures === 0 ? '\nвсё сошлось' : `\nпроблем: ${failures}`);

@@ -1,6 +1,7 @@
 /**
  * Клиент локального WebSocket-моста. На другом конце — расширение на
- * music.youtube.com, которое шлёт название, артиста, обложку и позицию.
+ * music.youtube.com, которое шлёт название, артиста, обложку и позицию, а
+ * двоичными сообщениями — кадры звука (см. `audio/bridge-audio.ts`).
  *
  * Мост локальный (127.0.0.1), поэтому ws:// здесь допустим: трафик не выходит
  * за пределы машины.
@@ -35,6 +36,7 @@ export class YouTubeMusicBridge {
   private status: BridgeStatus = 'disabled';
   private enabled = false;
   private listeners: Array<(track: NowPlayingTrack | null) => void> = [];
+  private audioListeners: Array<(frame: ArrayBuffer) => void> = [];
 
   constructor(private url: string = DEFAULT_BRIDGE_URL) {}
 
@@ -44,6 +46,11 @@ export class YouTubeMusicBridge {
 
   onTrack(listener: (track: NowPlayingTrack | null) => void): void {
     this.listeners.push(listener);
+  }
+
+  /** Кадры звука из вкладки YouTube Music. */
+  onAudio(listener: (frame: ArrayBuffer) => void): void {
+    this.audioListeners.push(listener);
   }
 
   start(url = this.url): void {
@@ -75,6 +82,7 @@ export class YouTubeMusicBridge {
       return;
     }
     this.socket = socket;
+    socket.binaryType = 'arraybuffer';
 
     socket.addEventListener('open', () => {
       this.status = 'connected';
@@ -99,6 +107,10 @@ export class YouTubeMusicBridge {
   }
 
   private handleMessage(raw: unknown): void {
+    if (raw instanceof ArrayBuffer) {
+      for (const listener of this.audioListeners) listener(raw);
+      return;
+    }
     if (typeof raw !== 'string') return;
     let message: BridgeMessage;
     try {

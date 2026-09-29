@@ -3,7 +3,8 @@
  *
  * Роли различаются по первому сообщению `hello`. Всё, что приходит от
  * расширения, рассылается визуализаторам; последнее состояние запоминается,
- * чтобы только что открытая вкладка сразу увидела текущий трек.
+ * чтобы только что открытая вкладка сразу увидела текущий трек. Двоичные
+ * сообщения — кадры звука из вкладки YouTube Music, их мост только пересылает.
  *
  * Слушаем только 127.0.0.1: наружу мост не смотрит.
  */
@@ -33,7 +34,15 @@ server.on('connection', (socket) => {
   // следующего тика расширения.
   if (lastState) socket.send(lastState);
 
-  socket.on('message', (raw) => {
+  socket.on('message', (raw, isBinary) => {
+    // Двоичное — кадры звука из вкладки YouTube Music: только пересылаем,
+    // не запоминаем. Отставший визуализатор кадр пропускает, а не копит
+    // очередь: звук из прошлого картинке не нужен.
+    if (isBinary) {
+      client.role = 'extension';
+      relayAudio(raw as Buffer, client);
+      return;
+    }
     const text = raw.toString();
     let message: { type?: string; role?: string };
     try {
@@ -82,6 +91,18 @@ function broadcast(payload: string, from: Client): void {
     if (client === from) continue;
     if (client.socket.readyState !== client.socket.OPEN) continue;
     client.socket.send(payload);
+  }
+}
+
+/** Больше этого в очереди сокета — визуализатор не успевает, кадр пропускаем. */
+const MAX_BUFFERED_BYTES = 256 * 1024;
+
+function relayAudio(payload: Buffer, from: Client): void {
+  for (const client of clients) {
+    if (client === from || client.role === 'extension') continue;
+    if (client.socket.readyState !== client.socket.OPEN) continue;
+    if (client.socket.bufferedAmount > MAX_BUFFERED_BYTES) continue;
+    client.socket.send(payload, { binary: true });
   }
 }
 

@@ -850,6 +850,14 @@ export class SettingsPanel {
         label: 'YouTube Music (мост)',
         get: () => s.sources.bridge, set: (v) => { s.sources.bridge = v; }, def: d.sources.bridge,
       })),
+      this.track(toggle({
+        label: 'Звук из YouTube Music без захвата',
+        get: () => s.sources.bridgeAudio, set: (v) => { s.sources.bridgeAudio = v; },
+        def: d.sources.bridgeAudio,
+      })),
+      note('Расширение берёт звук прямо из плеера YouTube Music: визуализация '
+        + 'стартует сама, окно выбора экрана не нужно. Если звук не идёт — один раз '
+        + 'кликните по странице YouTube Music: без клика браузер не даёт подключиться к звуку.'),
       this.track(textField({
         label: 'Адрес моста', placeholder: 'ws://127.0.0.1:8787',
         get: () => s.sources.bridgeUrl, set: (v) => { s.sources.bridgeUrl = v; },

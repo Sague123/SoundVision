@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "SoundVision — YouTube Music Bridge",
-  "version": "2.0.0",
-  "description": "Отдаёт визуализатору SoundVision название, артиста, обложку и позицию трека из YouTube Music.",
+  "version": "2.1.0",
+  "description": "Отдаёт визуализатору SoundVision звук, название, артиста, обложку и позицию трека из YouTube Music — без захвата экрана.",
   "permissions": ["storage"],
   "host_permissions": ["https://music.youtube.com/*"],
   "background": {

@@ -5,7 +5,8 @@
 
 import './style.css';
 
-import { captureMicrophone, captureSystemAudio, CaptureError, type AudioCapture } from './audio/capture.ts';
+import { BridgeAudioInput } from './audio/bridge-audio.ts';
+import { captureMicrophone, captureSystemAudio, CaptureError, type AudioInput } from './audio/capture.ts';
 import { idleMood, MoodEngine, type MoodConfig, type MoodVector } from './audio/mood-vector.ts';
 import { CoverArtLoader } from './cover/cover-art.ts';
 import { NowPlaying, type NowPlayingTrack } from './cover/now-playing.ts';
@@ -53,7 +54,9 @@ class App {
   private readonly panel: SettingsPanel;
   private readonly startScreen: StartScreen;
 
-  private capture: AudioCapture | null = null;
+  private capture: AudioInput | null = null;
+  /** Звук из вкладки YouTube Music: кадры приходят через мост. */
+  private readonly bridgeAudio = new BridgeAudioInput();
   private moodEngine: MoodEngine | null = null;
   private frameHandle = 0;
   /** Время последнего отрисованного кадра — по нему работает лимит fps. */
@@ -126,6 +129,8 @@ class App {
 
     this.wireSources();
     this.wireInput();
+    // Пока открыт старт-экран, он говорит, чего ждёт от YouTube Music.
+    window.setInterval(() => this.updateStartStatus(), 500);
     this.resize();
     window.addEventListener('resize', () => this.resize());
     // Панель выезжает с анимацией, поэтому одного события resize мало:
@@ -149,15 +154,34 @@ class App {
   }
 
   private async start(source: AudioSourceKind): Promise<void> {
+    let input: AudioInput;
     try {
-      this.capture = source === 'microphone' ? await captureMicrophone() : await captureSystemAudio();
+      input = source === 'microphone' ? await captureMicrophone() : await captureSystemAudio();
     } catch (err) {
       if (err instanceof CaptureError) throw new Error(err.message);
       throw err;
     }
+    this.useInput(input);
+  }
 
-    this.moodEngine = new MoodEngine(this.capture);
-    this.capture.onEnded(() => this.stop());
+  private updateStartStatus(): void {
+    if (!this.startScreen.visible) return;
+    const { bridge, bridgeAudio } = this.settings.sources;
+    if (!bridge || !bridgeAudio) this.startScreen.setBridgeState('disabled');
+    else if (this.bridge.state !== 'connected') this.startScreen.setBridgeState('no-bridge');
+    else if (this.nowPlaying.current()?.source === 'youtube-music' && !this.bridgeAudio.live) {
+      this.startScreen.setBridgeState('track-no-audio');
+    } else this.startScreen.setBridgeState('waiting');
+  }
+
+  /** Запустить визуализацию от источника звука; прежний источник закрывается. */
+  private useInput(input: AudioInput): void {
+    if (this.capture && this.capture !== input) this.capture.close();
+    this.capture = input;
+    this.moodEngine = new MoodEngine(input);
+    input.onEnded(() => {
+      if (this.capture === input) this.stop(true);
+    });
     this.startScreen.hide();
     void this.requestWakeLock();
 
@@ -165,22 +189,33 @@ class App {
     this.frameHandle = requestAnimationFrame(this.frame);
   }
 
-  private stop(): void {
+  /** @param ended — источник кончился сам (остановлен шеринг), а не выключен в настройках. */
+  private stop(ended = false): void {
     cancelAnimationFrame(this.frameHandle);
     this.frameHandle = 0;
+    const kind = this.capture?.kind;
     this.capture?.close();
     this.capture = null;
     this.moodEngine = null;
     void this.wakeLock?.release();
     this.wakeLock = null;
     this.startScreen.show();
-    this.startScreen.showError('Захват экрана остановлен. Запустите визуализацию заново.');
+    if (ended && kind !== 'bridge') {
+      this.startScreen.showError('Захват остановлен. Если играет YouTube Music, картинка вернётся сама; '
+        + 'иначе запустите визуализацию заново.');
+    }
+    this.renderIdleFrame();
   }
 
   private readonly frame = (timestamp: number): void => {
     this.frameHandle = requestAnimationFrame(this.frame);
     const engine = this.moodEngine;
     if (!engine) return;
+    // Звук из YouTube Music выключили в настройках — возвращаемся к старт-экрану.
+    if (this.capture?.kind === 'bridge' && !this.settings.sources.bridgeAudio) {
+      this.stop();
+      return;
+    }
 
     // Лимит кадров: пропускаем кадр целиком, а не только рендер, — анализ
     // читает те же данные анализатора и на пропуске ничего не теряет.
@@ -279,6 +314,13 @@ class App {
   private wireSources(): void {
     this.spotify.onTrack((track) => this.nowPlaying.update('spotify', track));
     this.bridge.onTrack((track) => this.nowPlaying.update('youtube-music', track));
+    // Звук из YouTube Music: первый же кадр запускает визуализацию — без
+    // клика и без окна выбора. Если уже идёт захват, выбранный руками, он
+    // главнее: кадры моста его не перебивают.
+    this.bridge.onAudio((frame) => {
+      if (!this.bridgeAudio.push(frame)) return;
+      if (this.settings.sources.bridgeAudio && !this.capture) this.useInput(this.bridgeAudio);
+    });
 
     this.nowPlaying.onChange((track, changed) => {
       void this.coverLoader.load(track?.coverUrl ?? null);
@@ -533,7 +575,12 @@ class App {
 
 const root = document.getElementById('app');
 if (!root) throw new Error('Не найден контейнер #app');
-void new App(root).init();
+const app = new App(root);
+void app.init();
+// Ручка для сквозных проверок в dev-сборке; в продакшн-сборку не попадает.
+if ((import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV) {
+  (window as unknown as { __app: App }).__app = app;
+}
 
 /** То, по изменению чего режиссёр учится неявно. */
 function watchedSnapshot(settings: Settings | null): { enabled: Record<string, boolean>; intensity: number } {

@@ -1,9 +1,28 @@
 /**
- * Старт-экран. Нужен на каждый запуск: разрешение на захват экрана даётся
- * на сессию, поэтому без явного клика звук взять невозможно.
+ * Старт-экран.
+ *
+ * Главный путь — YouTube Music через расширение: звук и трек приходят через
+ * локальный мост, и визуализация стартует сама, без клика. Экран в это время
+ * показывает, чего ждёт. Захват экрана и микрофон — запасные пути для других
+ * плееров: разрешение на них даётся на сессию, поэтому там нужен клик.
  */
 
 export type AudioSourceKind = 'system' | 'microphone';
+
+/** Что сейчас с источником «YouTube Music без захвата». */
+export type BridgeWaitState =
+  | 'disabled'      // выключено в настройках
+  | 'no-bridge'     // мост не отвечает
+  | 'waiting'       // мост есть, звука ещё нет
+  | 'track-no-audio'; // трек из YouTube Music виден, а звук не идёт
+
+const BRIDGE_TEXT: Record<BridgeWaitState, string> = {
+  disabled: 'Звук из YouTube Music выключен в настройках (клавиша S → «Источники»).',
+  'no-bridge': 'Мост не отвечает. Запустите его: npm run bridge — и держите окно открытым.',
+  waiting: 'Мост на связи. Включите музыку в YouTube Music — картинка запустится сама.',
+  'track-no-audio': 'Трек из YouTube Music виден, а звука нет. Кликните один раз по странице '
+    + 'YouTube Music: без клика браузер не даёт расширению подключиться к звуку.',
+};
 
 export interface StartScreenHandlers {
   onStart(source: AudioSourceKind): Promise<void>;
@@ -14,6 +33,7 @@ export class StartScreen {
   private readonly button = document.createElement('button');
   private readonly micButton = document.createElement('button');
   private readonly error = document.createElement('p');
+  private bridgeState: BridgeWaitState | null = null;
 
   constructor(private readonly handlers: StartScreenHandlers) {
     this.element.className = 'start';
@@ -21,20 +41,19 @@ export class StartScreen {
       <div class="start__card">
         <h1 class="start__title">SoundVision</h1>
         <p class="start__subtitle">Аудио-реактивная светомузыка для телевизора</p>
-        <ol class="start__steps">
-          <li>Нажмите «Запустить визуализацию».</li>
-          <li>В окне выбора источника откройте вкладку <b>«Весь экран»</b> и выберите экран.
-              Захват отдельной вкладки звук стороннего плеера <b>не отдаёт</b>.</li>
-          <li>Включите галочку <b>«Также предоставить доступ к системному аудио»</b>.</li>
-          <li>Запустите музыку в Spotify, YouTube Music — в чём угодно.</li>
-        </ol>
-        <p class="start__hint">Картинка появится сама. Панель настроек — клавиша <kbd>S</kbd>,
-           полный экран — <kbd>F</kbd>, новый вариант визуала — <kbd>R</kbd>.</p>
+        <p class="start__lead">Включите музыку в <b>YouTube Music</b> — визуализация запустится сама.
+           Звук, название и обложку расширение берёт прямо из плеера: ничего выбирать не нужно.</p>
+        <p class="start__status" data-state="no-bridge"></p>
+        <p class="start__hint">Панель настроек — клавиша <kbd>S</kbd>, полный экран — <kbd>F</kbd>,
+           новый вариант визуала — <kbd>R</kbd>.</p>
+        <p class="start__other">Другой плеер? Тогда звук берётся захватом: «Весь экран» и галочка
+           «Также предоставить доступ к системному аудио».</p>
       </div>
     `;
 
-    this.button.className = 'start__button';
-    this.button.textContent = 'Запустить визуализацию';
+    // Обе кнопки — запасной путь, поэтому обе тихие: главный путь без клика.
+    this.button.className = 'start__button start__button--secondary';
+    this.button.textContent = 'Захват экрана со звуком';
     this.button.addEventListener('click', () => void this.start('system'));
 
     // Живой режим: микрофон или линейный вход — концерт, пульт, колонки в комнате.
@@ -52,7 +71,21 @@ export class StartScreen {
     this.element.classList.remove('start--hidden');
     this.button.disabled = false;
     this.micButton.disabled = false;
-    this.button.textContent = 'Запустить визуализацию';
+    this.button.textContent = 'Захват экрана со звуком';
+  }
+
+  get visible(): boolean {
+    return !this.element.classList.contains('start--hidden');
+  }
+
+  /** Строка о том, чего ждём от YouTube Music. */
+  setBridgeState(state: BridgeWaitState): void {
+    if (state === this.bridgeState) return;
+    this.bridgeState = state;
+    const status = this.element.querySelector<HTMLElement>('.start__status');
+    if (!status) return;
+    status.textContent = BRIDGE_TEXT[state];
+    status.dataset.state = state;
   }
 
   hide(): void {
@@ -64,7 +97,7 @@ export class StartScreen {
     this.error.hidden = false;
     this.button.disabled = false;
     this.micButton.disabled = false;
-    this.button.textContent = 'Попробовать снова';
+    this.button.textContent = 'Захват экрана со звуком';
   }
 
   private async start(source: AudioSourceKind): Promise<void> {

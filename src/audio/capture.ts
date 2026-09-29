@@ -11,23 +11,43 @@ export class CaptureError extends Error {
   }
 }
 
-export interface AudioCapture {
-  stream: MediaStream;
-  context: AudioContext;
-  analyser: AnalyserNode;
+/**
+ * То, что анализу нужно от анализатора. Настоящий `AnalyserNode` подходит
+ * как есть; звук из расширения YouTube Music приходит готовыми кадрами и
+ * отдаётся через тот же интерфейс — анализ не знает, откуда звук.
+ */
+export type AnalyserLike = Pick<
+  AnalyserNode, 'fftSize' | 'frequencyBinCount' | 'getFloatFrequencyData' | 'getFloatTimeDomainData'
+>;
+
+/** Любой источник звука для визуализации. */
+export interface AudioInput {
+  kind: 'system' | 'microphone' | 'bridge';
+  sampleRate: number;
+  analyser: AnalyserLike;
   /**
    * Анализаторы отдельных каналов. Нужны осциллографу в режиме XY: фигуры
    * Лиссажу рисуются из левого и правого каналов как из X и Y.
    * При моно-источнике оба указывают на один и тот же анализатор.
    */
-  left: AnalyserNode;
-  right: AnalyserNode;
+  left: AnalyserLike;
+  right: AnalyserLike;
   /** Действительно ли источник стерео. */
   stereo: boolean;
-  source: MediaStreamAudioSourceNode;
-  /** Вызывается, когда пользователь остановил шеринг через плашку браузера. */
+  /** Вызывается, когда источник кончился (например, остановлен шеринг экрана). */
   onEnded(cb: () => void): void;
   close(): void;
+}
+
+/** Захват через браузер: экран со звуком или микрофон. */
+export interface AudioCapture extends AudioInput {
+  kind: 'system' | 'microphone';
+  stream: MediaStream;
+  context: AudioContext;
+  analyser: AnalyserNode;
+  left: AnalyserNode;
+  right: AnalyserNode;
+  source: MediaStreamAudioSourceNode;
 }
 
 export const FFT_SIZE = 2048;
@@ -86,7 +106,7 @@ export async function captureSystemAudio(): Promise<AudioCapture> {
     );
   }
 
-  return buildCapture(stream, audioTracks[0]);
+  return buildCapture(stream, audioTracks[0], 'system');
 }
 
 /**
@@ -122,11 +142,15 @@ export async function captureMicrophone(): Promise<AudioCapture> {
     stream.getTracks().forEach((t) => t.stop());
     throw new CaptureError('В потоке микрофона нет звука.', 'no-audio');
   }
-  return buildCapture(stream, track);
+  return buildCapture(stream, track, 'microphone');
 }
 
 /** Граф анализа одинаков для любого источника — различается только поток. */
-async function buildCapture(stream: MediaStream, audioTrack: MediaStreamTrack): Promise<AudioCapture> {
+async function buildCapture(
+  stream: MediaStream,
+  audioTrack: MediaStreamTrack,
+  kind: AudioCapture['kind'],
+): Promise<AudioCapture> {
   const context = new AudioContext({ latencyHint: 'interactive' });
   if (context.state === 'suspended') await context.resume();
 
@@ -154,6 +178,8 @@ async function buildCapture(stream: MediaStream, audioTrack: MediaStreamTrack): 
   audioTrack.addEventListener('ended', () => endedCallbacks.forEach((cb) => cb()));
 
   return {
+    kind,
+    sampleRate: context.sampleRate,
     stream,
     context,
     analyser,
