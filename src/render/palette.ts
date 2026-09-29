@@ -136,12 +136,23 @@ export class PaletteEngine {
     const breathChroma = 1 + Math.sin(this.barPhase * Math.PI * 2) * 0.07;
     const breathLight = Math.sin(this.phrasePhase * Math.PI * 2) * 0.025;
 
-    const chromaTarget = (0.035 + mood.brightness * 0.15 + mood.flux * 0.02) * tuning.chromaBoost;
+    /*
+     * Хрома держится высокой всегда, а яркость тембра только добавляет.
+     *
+     * Раньше пол был 0.035, и на обычной музыке хрома выходила около 0.09 —
+     * вдвое бледнее, чем у референсов: неоновый циан лежит на 0.15-0.20,
+     * маджента — на 0.25-0.30. Картинка из-за этого читалась выцветшей
+     * бирюзой, и никакая яркость линий этого не спасала. Выход за охват sRGB
+     * здесь не страшен: сборка палитры ужимает хрому до охвата сама.
+     */
+    const chromaTarget = (0.13 + mood.brightness * 0.12 + mood.flux * 0.05) * tuning.chromaBoost;
     const chroma = clamp(0.004, 0.33, this.chroma.update(chromaTarget, k) * breathChroma);
 
     // Энергия разводит фон и формы: формы светлее, фон темнее. Это контраст,
     // а не «сделать всё ярче» — иначе на дропе кадр просто выцветает.
-    const formTarget = (0.5 + mood.energy * 0.3) * tuning.lightnessBoost;
+    // Формы светлые: неоновый цвет — это высокая хрома при высокой же
+    // светлоте. С прежней серединой 0.5 насыщенный цвет выходил тёмным.
+    const formTarget = (0.64 + mood.energy * 0.24) * tuning.lightnessBoost;
     const formLightness = clamp(0.12, 0.95, this.lightness.update(formTarget, k) + breathLight);
     // Фон почти чёрный и остаётся таким. Серый или коричневый фон — это уже
     // заливка средними тонами, из-за неё кадр читается мутным независимо от

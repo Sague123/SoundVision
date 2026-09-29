@@ -194,26 +194,32 @@ export class WaveGrid3DPrimitive implements DrawPrimitive {
     }
     if (!started) return;
 
+    /*
+     * Энергия меняет размах и ширину свечения, но не гасит ядро.
+     *
+     * Раньше непрозрачность ядра умножалась на энергию, и на спокойном
+     * участке белая сердцевина входила в тон-маппинг на 0.41 — на экране
+     * самое яркое место кадра было 0.38. Ядро должно быть белым всегда:
+     * тихое место отличается от громкого размахом и ореолом, а не тем, что
+     * самая яркая линия стала серой.
+     */
     const energy = 0.35 + mood.energy * 0.65;
     const core = tuning.core;
 
-    // Гало: широкое и цветное, набирает объём вокруг шнура.
-    ctx.lineWidth = Math.max(2, 9 * tuning.lineWidth * energy);
-    ctx.strokeStyle = palette.accentAlpha(0.45, 0.1 * energy * weight * fade * core);
+    // Внешний ореол: широкий и насыщенный. Именно он даёт цвет — белое ядро
+    // само по себе бесцветно, а референсы держатся на неоне вокруг него.
+    ctx.lineWidth = Math.max(3, 16 * tuning.lineWidth * energy);
+    ctx.strokeStyle = palette.accentAlpha(0.35, 0.16 * weight * fade * core);
     ctx.stroke(path);
 
-    // Средний слой: собственно цвет линии.
-    ctx.lineWidth = Math.max(1.5, 3.4 * tuning.lineWidth);
-    ctx.strokeStyle = palette.accentAlpha(0.7, 0.32 * energy * weight * fade);
+    // Внутренний ореол: у́же и плотнее.
+    ctx.lineWidth = Math.max(2, 6 * tuning.lineWidth * (0.6 + energy * 0.4));
+    ctx.strokeStyle = palette.accentAlpha(0.6, 0.45 * weight * fade);
     ctx.stroke(path);
 
-    /*
-     * Сердцевина. Белая и почти непрозрачная — это то самое выжженное ядро,
-     * которым держится вся яркость референсов. Без неё самая светлая точка
-     * кадра остаётся приглушённым цветом, и картинка выглядит вялой.
-     */
-    ctx.lineWidth = Math.max(1, 1.3 * tuning.lineWidth);
-    ctx.strokeStyle = `rgba(255,255,255,${(0.85 * energy * weight * fade * core).toFixed(3)})`;
+    // Сердцевина: белая и непрозрачная. Этим держится вся яркость кадра.
+    ctx.lineWidth = Math.max(1, 1.6 * tuning.lineWidth);
+    ctx.strokeStyle = `rgba(255,255,255,${Math.min(1, 0.95 * weight * fade * core).toFixed(3)})`;
     ctx.stroke(path);
   }
 
