@@ -495,5 +495,37 @@ function fresh(): DirectorRuntime {
   check('память выгружается в JSON', Array.isArray(exported.events) && typeof exported.profile === 'object', '');
 }
 
+// --- 13. Каждая привязка сцены до чего-то доходит ------------------------------
+{
+  /*
+   * Привязка `warp` была описана во всех сценах, но режиссёр её не читал —
+   * мёртвый конфиг, который ни одна проверка не ловила. Здесь каждая
+   * объявленная привязка обязана менять выход режиссёра хоть как-то.
+   */
+  const settings = defaultSettings();
+  const runtime = fresh();
+  const sim = new SongSimulator([{ part: 'drop', fromSec: 0, toSec: 20 }]);
+  const seen = { primaryPulse: false, glow: false, particleBoost: false, cameraKick: false, warp: false };
+  let prev: { bloom: number; density: number; camera: number; warp: number; primary: number } | null = null;
+  for (let t = 0; t < 20000; t += FRAME_MS) {
+    const out = runtime.step(sim.mood(t, FRAME_MS), settings).output!;
+    const primary = out.scene.layers.find((l) => l.role === 'primary')!.primitive;
+    const now = {
+      bloom: out.bloom, density: out.particleDensity, camera: out.cameraAmount,
+      warp: out.modifiers.warp, primary: out.weights.get(primary) ?? 0,
+    };
+    if (prev && t > 3000) {
+      if (Math.abs(now.primary - prev.primary) > 1e-4) seen.primaryPulse = true;
+      if (Math.abs(now.bloom - prev.bloom) > 1e-4) seen.glow = true;
+      if (now.density - prev.density > 1e-3) seen.particleBoost = true;
+      if (Math.abs(now.camera - prev.camera) > 1e-4) seen.cameraKick = true;
+      if (now.warp > 0.01) seen.warp = true;
+    }
+    prev = now;
+  }
+  const dead = Object.entries(seen).filter(([, v]) => !v).map(([k]) => k);
+  check('каждая привязка сцены меняет выход режиссёра', dead.length === 0, dead.length ? `мёртвые: ${dead.join(', ')}` : 'все пять живые');
+}
+
 console.log(failures === 0 ? '\nрежиссёр: всё сошлось' : `\nрежиссёр: проблем ${failures}`);
 process.exit(failures === 0 ? 0 : 1);

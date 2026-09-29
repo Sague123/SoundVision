@@ -702,6 +702,9 @@ export class VisualDirector {
     this.typography += (clamp01(typoTarget) - this.typography) * follow(dtSec, 0.6);
 
     const mods = this.transitions.modifiers(now);
+    // Привязка сцены «деформация ← звук» ложится поверх волны перехода. Без
+    // этой строки привязка `warp` в описаниях сцен была мёртвым конфигом.
+    mods.warp = Math.min(1, mods.warp + params.get('warp', 0));
     out.modifiers = mods;
     out.particleDensity = clamp01(this.particleDensity + params.get('particleBoost', 0) * 0.5 + mods.particleBurst * 0.6);
     out.typography = this.typography;
