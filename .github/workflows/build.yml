@@ -1,0 +1,116 @@
+# Сборка SoundVision: проверки, помощники «Сейчас играет», exe для Windows и
+# dmg для macOS. На каждой сборочной машине после упаковки запускается сама
+# собранная программа с самопроверкой — так видно, что помощник и воркер
+# работают в настоящей сборке, а не только в разработке.
+
+name: Build
+
+on:
+  push:
+    branches: [claude/happy-hopper-uc11a6, main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: npm run typecheck
+      - run: npm test
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: npm ci
+      - name: Помощник «Сейчас играет» (C#)
+        run: npm run helpers
+      - name: Помощник живой?
+        run: node scripts/helper-smoke.mjs helpers-bin/win/NowPlaying.exe 5
+      - name: Сборка portable exe
+        run: npm run dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Собранное приложение проходит самопроверку
+        run: node scripts/app-smoke.mjs release/win-unpacked/SoundVision.exe release/smoke-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows
+          path: |
+            release/*.exe
+            release/smoke-report.json
+          if-no-files-found: warn
+
+  macos:
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Помощник «Сейчас играет» (Swift)
+        run: npm run helpers
+      - name: Помощник живой?
+        run: node scripts/helper-smoke.mjs helpers-bin/mac/NowPlayingHelper 5
+      - name: Сборка dmg
+        run: npm run dist:mac
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Собранное приложение проходит самопроверку
+        run: node scripts/app-smoke.mjs release/mac-arm64/SoundVision.app/Contents/MacOS/SoundVision release/smoke-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos
+          path: |
+            release/*.dmg
+            release/smoke-report.json
+          if-no-files-found: warn
+
+  release:
+    needs: [windows, macos]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+      - name: Что собралось
+        run: find dist-artifacts -type f | sort
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: stage0-latest
+          name: SoundVision, этап 0
+          prerelease: true
+          make_latest: false
+          body: |
+            Каркас этапа 0: отладочная панель и самопроверка, без картинки шоу.
+            Windows — portable exe (запуск двойным щелчком). macOS — dmg для Apple Silicon:
+            при первом запуске правый щелчок → «Открыть» (приложение подписано без сертификата).
+            Клавиша K запускает самопроверку, отчёт ложится в папку данных приложения.
+            Сборка из коммита ${{ github.sha }}.
+          files: |
+            dist-artifacts/windows/*.exe
+            dist-artifacts/macos/*.dmg

@@ -1,0 +1,43 @@
+appId: app.soundvision.visualizer
+productName: SoundVision
+directories:
+  output: release
+files:
+  - out/**/*
+  - package.json
+
+# Windows: один portable exe без установки.
+win:
+  target:
+    - target: portable
+      arch: [x64]
+  # Значок и подпись не нужны: без rcedit сборка проще и не требует wine.
+  signAndEditExecutable: false
+  extraResources:
+    - from: helpers-bin/win
+      to: helpers
+      filter: ["NowPlaying.exe"]
+portable:
+  artifactName: SoundVision-${version}-portable.exe
+
+# macOS: dmg под Apple Silicon (M3 Pro).
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+  category: public.app-category.music
+  # Без сертификата подписываем ad-hoc в afterPack: arm64-программа без
+  # подписи не запустится вовсе.
+  identity: null
+  extendInfo:
+    NSMicrophoneUsageDescription: SoundVision слушает звук, который играет на этом компьютере, через виртуальное аудио-устройство.
+    NSAppleEventsUsageDescription: SoundVision узнаёт у Spotify и Музыки, какой трек играет.
+    NSScreenCaptureUsageDescription: SoundVision берёт системный звук через запись экрана; картинка не сохраняется.
+  extraResources:
+    - from: helpers-bin/mac
+      to: helpers
+      filter: ["NowPlayingHelper"]
+dmg:
+  artifactName: SoundVision-${version}-arm64.dmg
+
+afterPack: scripts/after-pack.cjs
