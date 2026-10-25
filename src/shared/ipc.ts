@@ -13,7 +13,15 @@ export const CH = {
   nextDisplay: 'sv:next-display',
   setPanel: 'sv:set-panel',
   revealReport: 'sv:reveal-report',
+  nativeAudioStart: 'sv:native-audio-start',
+  nativeAudioStop: 'sv:native-audio-stop',
+  pcm: 'sv:pcm',
 } as const;
+
+/** Итог запуска захвата звука силами помощника. */
+export type NativeAudioResult =
+  | { ok: true; sampleRate: number; channels: number }
+  | { ok: false; error: string };
 
 export interface DisplayInfo {
   id: number;
@@ -73,6 +81,11 @@ export interface SoundVisionApi {
   revealReport(path: string): Promise<void>;
   nextDisplay(): Promise<DisplayInfo[]>;
   setPanelVisible(visible: boolean): Promise<void>;
+  /** Захват системного звука помощником (macOS). */
+  startNativeAudio(): Promise<NativeAudioResult>;
+  stopNativeAudio(): Promise<void>;
+  /** Блоки PCM: float32, стерео, кадры подряд L R L R. */
+  onPcm(callback: (data: ArrayBuffer) => void): () => void;
   onNowPlaying(callback: (state: NowPlayingState) => void): () => void;
   onHelperStatus(callback: (status: HelperStatus) => void): () => void;
 }

@@ -93,8 +93,12 @@ export function evaluateAudio(probe: AudioProbe): CheckResult {
       summary: 'Работает тестовый сигнал: цепочка «поток → воркер → панель» цела, а захват системного звука НЕ проверен.', data };
   }
   if (probe.peakMax < SILENCE_THRESHOLD) {
+    // На Mac тишина при открытом захвате — частый признак не выданного разрешения.
+    const hint = probe.opened.strategy === 'native-tap'
+      ? ' Если музыка точно играет через колонки: «Системные настройки → Конфиденциальность и безопасность → Запись экрана и системного звука» — разрешите SoundVision «Только системный звук» и перезапустите программу.'
+      : '';
     return { id: 'audio', title: 'Захват системного звука', status: 'warn',
-      summary: `Поток открыт (${probe.opened.label}), но за ${(probe.windowMs / 1000).toFixed(0)} с тишина. Включите музыку и повторите проверку (K).`, data };
+      summary: `Поток открыт (${probe.opened.label}), но за ${(probe.windowMs / 1000).toFixed(0)} с тишина. Включите музыку и повторите проверку (K).${hint}`, data };
   }
   return { id: 'audio', title: 'Захват системного звука', status: 'pass',
     summary: `${probe.opened.label}: звук идёт, ${probe.sampleRate} Гц, воркер ${probe.workletRateHz.toFixed(0)} сообщений/с.`, data };

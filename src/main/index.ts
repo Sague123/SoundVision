@@ -20,6 +20,7 @@ import { CH, type AppInfo, type DisplayInfo, type GpuInfo } from '../shared/ipc'
 import { loadConfig, saveConfig, type AppConfig } from './config';
 import { nextDisplay, pickDisplay } from './display';
 import { resolveHelper } from './now-playing/helper-path';
+import { NativeAudioService } from './native-audio';
 import { NowPlayingService } from './now-playing/service';
 
 const cli = parseCli(process.argv.slice(1));
@@ -36,6 +37,7 @@ protocol.registerSchemesAsPrivileged([
 let win: BrowserWindow | null = null;
 let config: AppConfig;
 let service: NowPlayingService;
+let nativeAudio: NativeAudioService;
 let currentDisplayId = 0;
 let hardExitTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -53,7 +55,7 @@ if (!app.requestSingleInstanceLock()) {
   });
   void app.whenReady().then(start);
   app.on('window-all-closed', () => app.quit());
-  app.on('before-quit', () => service?.stop());
+  app.on('before-quit', () => { service?.stop(); nativeAudio?.stop(); });
 }
 
 async function start(): Promise<void> {
@@ -70,6 +72,10 @@ async function start(): Promise<void> {
   service.on('state', (state) => win?.webContents.send(CH.nowPlaying, state));
   service.on('status', (status) => win?.webContents.send(CH.helperStatus, status));
   service.start();
+
+  // Тот же помощник умеет снимать системный звук (macOS); запускается по просьбе интерфейса.
+  nativeAudio = new NativeAudioService(helper.spec ?? null, helper.reason ?? null);
+  nativeAudio.on('pcm', (data) => win?.webContents.send(CH.pcm, data));
 
   // Экран не гаснет, пока идёт шоу.
   powerSaveBlocker.start('prevent-display-sleep');
@@ -270,6 +276,8 @@ function registerIpc(): void {
   ipcMain.handle(CH.info, () => appInfo());
   ipcMain.handle(CH.snapshot, () => ({ state: service.getState(), status: service.getStatus() }));
   ipcMain.handle(CH.gpu, () => gpuInfo());
+  ipcMain.handle(CH.nativeAudioStart, () => nativeAudio.start());
+  ipcMain.handle(CH.nativeAudioStop, () => nativeAudio.stop());
   ipcMain.handle(CH.nextDisplay, () => moveToNextDisplay());
   ipcMain.handle(CH.setPanel, (_event, visible: boolean) => {
     config = { ...config, showPanel: visible === true };

@@ -61,3 +61,6 @@ class LevelMeter extends AudioWorkletProcessor {
 }
 
 registerProcessor('level-meter', LevelMeter);
+
+// Файл — модуль, чтобы объявления выше не пересекались с другим воркером.
+export {};

@@ -32,6 +32,7 @@ mac:
   extendInfo:
     NSMicrophoneUsageDescription: SoundVision слушает звук, который играет на этом компьютере, через виртуальное аудио-устройство.
     NSAppleEventsUsageDescription: SoundVision узнаёт у Spotify и Музыки, какой трек играет.
+    NSAudioCaptureUsageDescription: SoundVision слушает звук, который играет на этом компьютере, чтобы шоу двигалось в такт музыке.
     NSScreenCaptureUsageDescription: SoundVision берёт системный звук через запись экрана; картинка не сохраняется.
   extraResources:
     - from: helpers-bin/mac

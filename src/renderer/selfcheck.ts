@@ -70,10 +70,13 @@ export async function runSelfCheck(ctx: SelfCheckContext): Promise<Stage0Report>
 function environmentCheck(info: AppInfo): CheckResult {
   const base = `${info.platform} ${info.arch}, ОС ${info.osRelease}, Electron ${info.electron}, Chromium ${info.chrome}`;
   const perms = info.macPermissions;
-  if (perms && (perms.screen !== 'granted' || perms.microphone !== 'granted')) {
+  if (perms) {
+    // Системный звук идёт через Core Audio и просит своё разрешение, которое
+    // нельзя прочитать из программы: оно видно только по тому, идёт ли звук.
+    // Запись экрана и микрофон нужны лишь запасным путям.
     return {
-      id: 'environment', title: 'Окружение', status: 'warn',
-      summary: `${base}. Права macOS: запись экрана — ${perms.screen}, микрофон — ${perms.microphone}. Без них звук не откроется.`,
+      id: 'environment', title: 'Окружение', status: 'info',
+      summary: `${base}. Права macOS: запись экрана — ${perms.screen}, микрофон — ${perms.microphone} (для основного захвата звука не нужны).`,
       data: { ...info },
     };
   }

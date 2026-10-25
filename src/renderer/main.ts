@@ -48,7 +48,9 @@ async function ensureAudio(): Promise<void> {
     return;
   }
   opening = (async () => {
-    const outcome = await openAudio(strategyOrder(info.cli.audio === 'test'));
+    const outcome = await openAudio(strategyOrder({
+      testTone: info.cli.audio === 'test', platform: info.platform, fakeHelper: info.cli.fakeHelper,
+    }));
     attempts = outcome.attempts;
     if (!outcome.opened) {
       audioError = `Звук не получен: ${attempts.map((a) => `${a.strategy} — ${a.detail}`).join('; ')}`;

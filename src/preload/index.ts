@@ -16,6 +16,9 @@ const api: SoundVisionApi = {
   revealReport: (path) => ipcRenderer.invoke(CH.revealReport, path),
   nextDisplay: () => ipcRenderer.invoke(CH.nextDisplay),
   setPanelVisible: (visible) => ipcRenderer.invoke(CH.setPanel, visible),
+  startNativeAudio: () => ipcRenderer.invoke(CH.nativeAudioStart),
+  stopNativeAudio: () => ipcRenderer.invoke(CH.nativeAudioStop),
+  onPcm: (callback) => subscribe<ArrayBuffer>(CH.pcm, callback),
   onNowPlaying: (callback) => subscribe<NowPlayingState>(CH.nowPlaying, callback),
   onHelperStatus: (callback) => subscribe<HelperStatus>(CH.helperStatus, callback),
 };

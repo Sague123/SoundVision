@@ -4,8 +4,10 @@
  * Шоу слушает системный вывод. Как его получить, зависит от системы, поэтому
  * стратегии идут по очереди, пока одна не даст звуковую дорожку:
  *
- *   loopback        Electron отдаёт звук всего компьютера. Работает на Windows;
- *                   на macOS документация Electron его не обещает — проверяется.
+ *   native-tap      помощник снимает системный звук сам и присылает поток
+ *                   (macOS, Core Audio). Электрон этого не умеет — только
+ *                   Windows — поэтому на Mac это основной путь.
+ *   loopback        Electron отдаёт звук всего компьютера. Работает на Windows.
  *   virtual-device  виртуальное устройство (BlackHole и подобные) как вход.
  *   test-tone       тестовый сигнал для проверки цепочки, не музыка.
  *
@@ -14,9 +16,10 @@
  */
 
 import { pickVirtualDevice } from './devices';
+import pcmWorkletUrl from './pcm-feed.worklet.ts?worker&url';
 import { createTestToneStream } from './test-tone';
 
-export type StrategyId = 'loopback' | 'virtual-device' | 'test-tone';
+export type StrategyId = 'native-tap' | 'loopback' | 'virtual-device' | 'test-tone';
 
 export interface Attempt {
   strategy: StrategyId;
@@ -46,8 +49,22 @@ const RAW_AUDIO: MediaTrackConstraints = {
   echoCancellation: false, noiseSuppression: false, autoGainControl: false,
 };
 
-export function strategyOrder(testTone: boolean): StrategyId[] {
-  return testTone ? ['test-tone'] : ['loopback', 'virtual-device'];
+export interface OrderOptions {
+  testTone: boolean;
+  platform: string;
+  /** Заглушка помощника: проверка цепочки без настоящего Mac. */
+  fakeHelper: boolean;
+}
+
+/**
+ * Порядок стратегий. На macOS loopback Electron не работает вовсе, поэтому его
+ * там не пробуем: он только добавил бы ошибку в отчёт и мигание запроса прав.
+ */
+export function strategyOrder(options: OrderOptions): StrategyId[] {
+  if (options.testTone) return ['test-tone'];
+  if (options.platform === 'darwin') return ['native-tap', 'virtual-device'];
+  if (options.fakeHelper) return ['native-tap'];
+  return ['loopback', 'virtual-device'];
 }
 
 export async function openAudio(order: readonly StrategyId[]): Promise<OpenOutcome> {
@@ -67,6 +84,7 @@ export async function openAudio(order: readonly StrategyId[]): Promise<OpenOutco
 
 function run(strategy: StrategyId): Promise<OpenedAudio> {
   switch (strategy) {
+    case 'native-tap': return openNativeTap();
     case 'loopback': return openLoopback();
     case 'virtual-device': return openVirtualDevice();
     case 'test-tone': return Promise.resolve(openTestTone());
@@ -86,6 +104,36 @@ async function openLoopback(): Promise<OpenedAudio> {
   return {
     stream: new MediaStream(audio), strategy: 'loopback', label: 'Системный звук (loopback)', synthetic: false,
     release: () => audio.forEach((track) => track.stop()),
+  };
+}
+
+async function openNativeTap(): Promise<OpenedAudio> {
+  const sv = window.sv;
+  const started = await sv.startNativeAudio();
+  if (!started.ok) throw new Error(started.error);
+
+  // Блоки PCM → воркер → MediaStream: дальше всё как у любого другого источника.
+  const context = new AudioContext({ sampleRate: started.sampleRate, latencyHint: 'interactive' });
+  try {
+    await context.audioWorklet.addModule(pcmWorkletUrl);
+  } catch (error) {
+    void context.close();
+    void sv.stopNativeAudio();
+    throw error;
+  }
+  const node = new AudioWorkletNode(context, 'pcm-feed', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
+  const destination = context.createMediaStreamDestination();
+  node.connect(destination);
+  const stopListening = sv.onPcm((data) => node.port.postMessage(data, [data]));
+
+  return {
+    stream: destination.stream, strategy: 'native-tap', label: 'Системный звук (Core Audio, помощник)', synthetic: false,
+    release: () => {
+      stopListening();
+      void sv.stopNativeAudio();
+      destination.stream.getTracks().forEach((track) => track.stop());
+      void context.close();
+    },
   };
 }
 

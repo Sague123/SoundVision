@@ -16,33 +16,9 @@
 import AppKit
 import Foundation
 
-signal(SIGPIPE, SIG_IGN)
-
-// MARK: - Вывод
-
-let outLock = NSLock()
-
-func send(_ object: [String: Any]) {
-    guard var data = try? JSONSerialization.data(withJSONObject: object, options: [.withoutEscapingSlashes]) else { return }
-    data.append(0x0A)
-    outLock.lock()
-    defer { outLock.unlock() }
-    let ok = data.withUnsafeBytes { raw -> Bool in
-        guard let base = raw.baseAddress else { return true }
-        var offset = 0
-        while offset < raw.count {
-            let written = write(STDOUT_FILENO, base + offset, raw.count - offset)
-            if written <= 0 { return false }
-            offset += written
-        }
-        return true
-    }
-    // Родитель закрыл трубу — писать некому.
-    if !ok { exit(0) }
-}
-
-func sendError(_ message: String, code: String) {
-    send(["type": "error", "message": message, "code": code])
+// Тот же исполняемый файл умеет снимать системный звук: `--audio-tap`.
+if CommandLine.arguments.contains("--audio-tap") {
+    runAudioTap()
 }
 
 // MARK: - Снимок трека
@@ -265,11 +241,7 @@ func appleScriptSnapshot(_ player: Player) -> Snapshot? {
 
 // MARK: - Основной цикл
 
-DispatchQueue.global().async {
-    // stdin закрылся — приложение-родитель закрылось.
-    while readLine(strippingNewline: false) != nil {}
-    exit(0)
-}
+watchParent()
 
 let remote = MediaRemote()
 var mode = remote.available ? "macos-mediaremote" : "macos-applescript"

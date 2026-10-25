@@ -6,6 +6,30 @@
 // Переменные: FAKE_EXIT_AFTER_MS — упасть через столько мс (проверка перезапуска),
 //             FAKE_NO_COVER=1 — не слать обложки.
 
+// Режим `--audio-tap`: вместо треков пишет в дескриптор 3 сырой PCM (бочка 120 уд/мин),
+// как настоящий помощник на macOS. Проверка цепочки; это не музыка.
+if (process.argv.includes('--audio-tap')) {
+  const fs = await import('node:fs');
+  const SAMPLE_RATE = 48000;
+  const CHUNK = 480; // 10 мс
+  process.stdout.write(JSON.stringify({ type: 'hello', helper: 'fake-audio', version: '1' }) + '\n');
+  process.stdout.write(JSON.stringify({ type: 'audio-format', sampleRate: SAMPLE_RATE, channels: 2 }) + '\n');
+  let frame = 0;
+  const timer = setInterval(() => {
+    const buffer = Buffer.alloc(CHUNK * 8);
+    for (let i = 0; i < CHUNK; i++, frame++) {
+      const t = (frame % (SAMPLE_RATE / 2)) / SAMPLE_RATE; // доля секунды от начала удара
+      const kick = Math.sin(2 * Math.PI * (45 + 95 * Math.exp(-t * 25)) * t) * Math.exp(-t * 9) * 0.8;
+      buffer.writeFloatLE(kick, i * 8);
+      buffer.writeFloatLE(kick * 0.9, i * 8 + 4);
+    }
+    try { fs.writeSync(3, buffer); } catch { process.exit(0); }
+  }, 10);
+  process.stdin.on('end', () => { clearInterval(timer); process.exit(0); });
+  process.stdin.resume();
+  if (process.env.FAKE_EXIT_AFTER_MS) setTimeout(() => process.exit(75), Number(process.env.FAKE_EXIT_AFTER_MS));
+} else {
+
 const TRACKS = [
   { artist: 'Тестовый артист', title: 'Первая композиция', album: 'Альбом А', app: 'Spotify', durationMs: 212_000, hue: 330 },
   { artist: 'Другой артист', title: 'Вторая композиция', album: 'Альбом Б', app: 'Chrome', durationMs: 187_000, hue: 200 },
@@ -46,3 +70,5 @@ tick();
 setInterval(tick, 1000);
 
 if (process.env.FAKE_EXIT_AFTER_MS) setTimeout(() => process.exit(3), Number(process.env.FAKE_EXIT_AFTER_MS));
+
+}
