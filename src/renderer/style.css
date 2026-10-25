@@ -1,0 +1,64 @@
+:root {
+  --bg: #07060a;
+  --panel: rgba(14, 12, 20, 0.86);
+  --line: rgba(255, 255, 255, 0.12);
+  --fg: #ece8f2;
+  --muted: #9b94a8;
+  --pass: #6fcf97;
+  --warn: #f2b24c;
+  --fail: #ef6a5a;
+  --info: #8fb4ff;
+  --mono: ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); overflow: hidden; }
+body { font: 13px/1.45 var(--mono); cursor: none; }
+body.cursor { cursor: default; }
+
+/* Безопасная рамка телевизора: 80 px по бокам, 60 px сверху и снизу. */
+.panel {
+  position: fixed; top: 60px; left: 80px; bottom: 60px; width: min(560px, calc(100% - 160px));
+  overflow-y: auto; padding: 16px 18px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; backdrop-filter: blur(10px); scrollbar-width: thin;
+}
+.panel.hidden { display: none; }
+.panel h1 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+.panel h2 { margin: 16px 0 6px; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--warn); font-weight: 600; }
+.hint { margin: 0; color: var(--muted); font-size: 11.5px; }
+
+.row { display: grid; grid-template-columns: 84px 1fr; gap: 8px; padding: 1px 0; }
+.label { color: var(--muted); }
+.value { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.value.warn { color: var(--warn); }
+
+.meters { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+.meter { display: block; flex: 1; height: 8px; background: rgba(255, 255, 255, 0.08); border-radius: 4px; overflow: hidden; }
+.meter i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #4f8cff, #e0508a); }
+.flag { min-width: 84px; color: var(--warn); font-size: 11.5px; text-align: right; }
+
+.track { display: grid; grid-template-columns: 96px 1fr; gap: 12px; align-items: start; margin-bottom: 6px; }
+.track-text { min-width: 0; }
+.cover { width: 96px; height: 96px; object-fit: cover; border-radius: 6px; background: rgba(255, 255, 255, 0.06); border: 1px solid var(--line); display: block; }
+.cover.empty { visibility: hidden; }
+.cover-info { color: var(--muted); font-size: 11.5px; margin-bottom: 4px; }
+
+.display { color: var(--muted); font-size: 12px; }
+.display.current { color: var(--fg); }
+
+button {
+  margin-top: 8px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.06); color: var(--fg); font: inherit; cursor: pointer;
+}
+button:hover, button:focus-visible { background: rgba(255, 255, 255, 0.12); outline: none; }
+
+.check-status { margin: 8px 0 0; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.checks { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.check { display: flex; flex-direction: column; gap: 2px; padding-left: 10px; border-left: 3px solid var(--info); }
+.check b { font-weight: 600; }
+.check span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.check.pass { border-color: var(--pass); } .check.pass b { color: var(--pass); }
+.check.warn { border-color: var(--warn); } .check.warn b { color: var(--warn); }
+.check.fail { border-color: var(--fail); } .check.fail b { color: var(--fail); }
+.check.info b { color: var(--info); }
