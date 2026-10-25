@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FRAME_BYTES, FrameAligner, parseAudioLine } from '../src/shared/audio-helper';
 import { NativeAudioService } from '../src/main/native-audio';
-import { strategyOrder } from '../src/renderer/audio/sources';
+import { strategyOrder } from '../src/shared/audio-strategy';
 
 const FAKE = resolve('helpers/fake/now-playing.mjs');
 const spec = (env: Record<string, string> = {}) => ({ command: process.execPath, args: [FAKE], env, label: 'fake' });

@@ -11,7 +11,8 @@ import { PlayerObserver } from '@shared/observer';
 import type { AppInfo, DisplayInfo } from '@shared/ipc';
 import type { CheckResult } from '@shared/report';
 import { AudioPipeline } from './audio/pipeline';
-import { openAudio, strategyOrder, type Attempt, type OpenedAudio } from './audio/sources';
+import { strategyOrder } from '@shared/audio-strategy';
+import { openAudio, type Attempt, type OpenedAudio } from './audio/sources';
 import { runSelfCheck } from './selfcheck';
 import { DebugPanel } from './ui/panel';
 
