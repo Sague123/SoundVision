@@ -1,7 +1,12 @@
 node_modules/
+out/
 dist/
 release/
 .vite/
 *.local
 .env
 .DS_Store
+helpers/windows/NowPlaying/bin/
+helpers/windows/NowPlaying/obj/
+helpers/macos/NowPlaying/.build/
+helpers-bin/
