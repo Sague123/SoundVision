@@ -278,7 +278,6 @@ if !remote.available {
     sendError("MediaRemote не найден в системе; работает только AppleScript (Spotify, Music)", code: "unsupported")
 }
 
-var silentPolls = 0
 var warnedBlocked = false
 var lastKey = ""
 var coverSent = false
@@ -296,18 +295,17 @@ func switchMode(to newMode: String) {
 
 while true {
     var snapshot: Snapshot?
+    var mediaRemoteSilent = false
 
     switch remote.fetch() {
     case .answered(let info):
-        silentPolls = 0
         snapshot = remote.snapshot(from: info)
         if snapshot != nil { switchMode(to: "macos-mediaremote") }
     case .silent:
-        silentPolls += 1
-        if silentPolls >= 6 && !warnedBlocked && remote.available {
-            warnedBlocked = true
-            sendError("MediaRemote не отвечает (в macOS 15.4+ он закрыт для сторонних программ); остаются Spotify и Music через AppleScript", code: "blocked")
-        }
+        // Молчание само по себе ничего не доказывает: когда ничего не играет,
+        // система тоже может не ответить. О блокировке скажем, только если
+        // плеер играет, а MediaRemote молчит.
+        mediaRemoteSilent = true
     }
 
     if snapshot == nil {
@@ -318,7 +316,13 @@ while true {
                 if found.playing { break }
             }
         }
-        if snapshot != nil { switchMode(to: "macos-applescript") }
+        if let found = snapshot {
+            switchMode(to: "macos-applescript")
+            if mediaRemoteSilent && found.playing && remote.available && !warnedBlocked {
+                warnedBlocked = true
+                sendError("MediaRemote молчит, хотя \(found.app) играет: в macOS 15.4+ он закрыт для сторонних программ. Данные идут через AppleScript — Chrome с YouTube Music при этом не виден", code: "blocked")
+            }
+        }
     }
 
     if let s = snapshot {
