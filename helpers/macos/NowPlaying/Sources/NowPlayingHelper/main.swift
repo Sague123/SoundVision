@@ -4,6 +4,8 @@
 // Windows-помощника (src/shared/now-playing.ts).
 //
 // Источники по порядку:
+//   0. mediaremote-adapter через системный perl (Adapter.swift): работает и на
+//      macOS 15.4+, где MediaRemote закрыт для чужих программ; видит браузеры.
 //   1. MediaRemote (приватный фреймворк, тот же, что кормит Пункт управления):
 //      отдаёт трек любого плеера, включая Chrome с YouTube Music.
 //      Начиная с macOS 15.4 система отвечает на него только программам Apple —
@@ -244,13 +246,23 @@ func appleScriptSnapshot(_ player: Player) -> Snapshot? {
 watchParent()
 
 let remote = MediaRemote()
-var mode = remote.available ? "macos-mediaremote" : "macos-applescript"
+let adapter = AdapterStream()
+var adapterActive = false
+if let files = AdapterStream.locate() {
+    adapterActive = adapter.start(script: files.script, framework: files.framework)
+    atexit { adapter.stop() }
+}
+var mode = adapterActive ? "macos-mediaremote-adapter" : (remote.available ? "macos-mediaremote" : "macos-applescript")
 send(["type": "hello", "helper": mode, "version": "1"])
+if !adapterActive {
+    sendError("Адаптер MediaRemote не запущен: \(adapter.failure ?? "его файлов нет в сборке")", code: "failed")
+}
 if !remote.available {
     sendError("MediaRemote не найден в системе; работает только AppleScript (Spotify, Music)", code: "unsupported")
 }
 
 var warnedBlocked = false
+var reportedAdapterFailure = false
 var lastKey = ""
 var coverSent = false
 
@@ -269,6 +281,17 @@ while true {
     var snapshot: Snapshot?
     var mediaRemoteSilent = false
 
+    if adapterActive {
+        if let body = adapter.current() {
+            snapshot = adapterSnapshot(from: body)
+            if snapshot != nil { switchMode(to: "macos-mediaremote-adapter") }
+        } else if !adapter.isRunning, !reportedAdapterFailure {
+            reportedAdapterFailure = true
+            sendError("Адаптер MediaRemote остановился: \(adapter.lastFailure() ?? "без объяснений")", code: "failed")
+        }
+    }
+
+    if snapshot == nil {
     switch remote.fetch() {
     case .answered(let info):
         snapshot = remote.snapshot(from: info)
@@ -278,6 +301,7 @@ while true {
         // система тоже может не ответить. О блокировке скажем, только если
         // плеер играет, а MediaRemote молчит.
         mediaRemoteSilent = true
+    }
     }
 
     if snapshot == nil {
